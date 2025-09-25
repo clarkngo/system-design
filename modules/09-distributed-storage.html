@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Module 9: Distributed Storage</title>
+    <link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+    <header>
+        <h1>Module 9: Distributed Storage</h1>
+        <a href="../index.html">Back to Home</a>
+    </header>
+
+    <div class="section">
+        <h2>Types of Distributed Storage</h2>
+        <ul>
+            <li><strong>Object Storage:</strong> Data is managed as objects. Each object includes the data itself, a variable amount of metadata, and a globally unique identifier. Examples: Amazon S3, Google Cloud Storage.</li>
+            <li><strong>Block Storage:</strong> Data is stored in blocks, which are fixed-size chunks of data. This is used by storage area networks (SANs) and is suitable for databases and other transactional workloads. Examples: Amazon EBS, Google Persistent Disk.</li>
+            <li><strong>File Storage:</strong> Data is stored in a hierarchical structure of files and folders. This is what you typically interact with on your personal computer. Examples: Network Attached Storage (NAS), Amazon EFS.</li>
+        </ul>
+    </div>
+
+    <div class="section">
+        <h2>HDFS (Hadoop Distributed File System)</h2>
+        <p>HDFS is a distributed file system designed to run on commodity hardware. It is highly fault-tolerant and is designed to be deployed on low-cost hardware.</p>
+        <p>Key features of HDFS:</p>
+        <ul>
+            <li><strong>Large Data Sets:</strong> HDFS is designed to support very large files.</li>
+            <li><strong>Streaming Data Access:</strong> HDFS is built around the idea that the most efficient data processing pattern is a write-once, read-many-times pattern.</li>
+            <li><strong>Fault Tolerance:</strong> HDFS is designed to detect faults and to automatically and quickly recover from them. Data is replicated across multiple nodes to protect against data loss.</li>
+        </ul>
+    </div>
+
+</body>
+</html>

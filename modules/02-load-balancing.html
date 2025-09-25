@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Module 2: Load Balancing</title>
+    <link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+    <header>
+        <h1>Module 2: Load Balancing</h1>
+        <a href="../index.html">Back to Home</a>
+    </header>
+
+    <div class="section">
+        <h2>What is a Load Balancer?</h2>
+        <p>A load balancer is a device that acts as a reverse proxy and distributes network or application traffic across a number of servers. Load balancers are used to increase capacity (concurrent users) and reliability of applications.</p>
+
+        <h3>Layer 4 (L4) vs. Layer 7 (L7) Load Balancing</h3>
+        <p>Load balancers can operate at different layers of the OSI model.</p>
+        <ul>
+            <li><strong>L4 Load Balancer:</strong> Operates at the transport layer (e.g., TCP, UDP). It makes routing decisions based on the source and destination IP addresses and ports, without inspecting the content of the traffic. It's very fast and simple.</li>
+            <li><strong>L7 Load Balancer:</strong> Operates at the application layer (e.g., HTTP). It can inspect the content of the traffic, such as HTTP headers or cookies. This allows for more intelligent routing decisions, such as routing a user to the same server they were on previously (sticky sessions) or routing based on the URL path.</li>
+        </ul>
+
+        <h3>Load Balancing Algorithms</h3>
+        <p>There are several algorithms for distributing traffic:</p>
+        <ul>
+            <li><strong>Round Robin:</strong> Each server gets a turn in a cyclical order. It's simple but doesn't account for server load.</li>
+            <li><strong>Least Connections:</strong> The load balancer sends traffic to the server with the fewest active connections. This is a more intelligent approach that accounts for server load.</li>
+            <li><strong>IP Hash:</strong> The load balancer calculates a hash of the client's IP address and uses it to determine which server to send the request to. This ensures that a user is consistently sent to the same server.</li>
+            <li><strong>Weighted Round Robin:</strong> Some servers are given a higher weight than others, and they receive a proportionally larger share of the traffic. This is useful if you have servers with different capacities.</li>
+        </ul>
+    </div>
+
+</body>
+</html>

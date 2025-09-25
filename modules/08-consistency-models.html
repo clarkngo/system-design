@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Module 8: Consistency Models</title>
+    <link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+    <header>
+        <h1>Module 8: Consistency Models</h1>
+        <a href="../index.html">Back to Home</a>
+    </header>
+
+    <div class="section">
+        <h2>Understanding Consistency</h2>
+        <p>In distributed systems, consistency refers to the guarantee that all replicas of a piece of data will have the same value at a given point in time. There are various levels of consistency, each with its own trade-offs.</p>
+
+        <h3>Strong Consistency</h3>
+        <p>Also known as linearizability, this is the strongest consistency model. It guarantees that every operation appears to take place instantaneously. Once a write is complete, all subsequent reads will see the new value.</p>
+
+        <h3>Weak Consistency</h3>
+        <p>The system does not guarantee that subsequent reads will return the updated value. It may take some time for the new value to propagate to all replicas.</p>
+
+        <h3>Eventual Consistency</h3>
+        <p>A specific form of weak consistency. It guarantees that if no new updates are made to a given data item, all accesses to that item will eventually return the last updated value. This is a common model in highly available systems like NoSQL databases.</p>
+
+        <h3>Causal Consistency</h3>
+        <p>A stronger model than eventual consistency. It ensures that if operation A happens before operation B, then A is guaranteed to be seen by every replica before B. Operations that are not causally related can be seen in any order.</p>
+    </div>
+
+</body>
+</html>

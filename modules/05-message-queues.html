@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Module 5: Message Queues</title>
+    <link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+    <header>
+        <h1>Module 5: Message Queues & Event-Driven Architecture</h1>
+        <a href="../index.html">Back to Home</a>
+    </header>
+
+    <div class="section">
+        <h2>What is a Message Queue?</h2>
+        <p>A message queue is a form of asynchronous service-to-service communication used in serverless and microservices architectures. Messages are stored on the queue until they are processed and deleted. Each message is processed only once, by a single consumer.</p>
+        <p>Examples: RabbitMQ, Amazon SQS, Azure Service Bus</p>
+
+        <h3>Benefits of Message Queues</h3>
+        <ul>
+            <li><strong>Decoupling:</strong> Producers and consumers are not aware of each other. They only need to know about the queue.</li>
+            <li><strong>Asynchronous Processing:</strong> Producers can add messages to the queue without having to wait for them to be processed. This is useful for long-running tasks.</li>
+            <li><strong>Load Leveling:</strong> Message queues can help to smooth out peaks in load. If a service is receiving a high volume of requests, it can add them to a queue and process them at its own pace.</li>
+        </ul>
+    </div>
+
+    <div class="section">
+        <h2>Event-Driven Architecture</h2>
+        <p>In an event-driven architecture, services communicate through events. An event is a change in state. When a service's state changes, it publishes an event. Other services can subscribe to these events and react accordingly.</p>
+        <p>This is often implemented using a **message broker** or **event bus**, such as Apache Kafka or Amazon Kinesis. Unlike a message queue where each message is processed by a single consumer, an event bus allows multiple consumers to receive and process the same event.</p>
+
+        <h3>Delivery Guarantees</h3>
+        <ul>
+            <li><strong>At-most-once:</strong> A message will be delivered once or not at all. There is a risk of data loss.</li>
+            <li><strong>At-least-once:</strong> A message will be delivered one or more times. This can lead to duplicate processing, so consumers must be idempotent.</li>
+            <li><strong>Exactly-once:</strong> A message will be delivered exactly once. This is the most desirable but also the most difficult to achieve.</li>
+        </ul>
+    </div>
+
+</body>
+</html>

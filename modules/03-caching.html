@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Module 3: Caching Strategies</title>
+    <link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+    <header>
+        <h1>Module 3: Caching Strategies</h1>
+        <a href="../index.html">Back to Home</a>
+    </header>
+
+    <div class="section">
+        <h2>The Role of Caching</h2>
+        <p>Caching is a technique used to store frequently accessed data in a temporary storage location (a cache) that is faster to access than the primary data source. The goal is to reduce latency and the load on the backend system.</p>
+
+        <h3>Common Caching Strategies</h3>
+        <ul>
+            <li><strong>Cache-Aside (Lazy Loading):</strong> The application is responsible for loading data into the cache. When a request comes in, the application first checks the cache. If the data is there (a cache hit), it's returned to the client. If not (a cache miss), the application fetches the data from the database, stores it in the cache, and then returns it.</li>
+            <li><strong>Read-Through:</strong> The cache itself is responsible for fetching data from the database on a cache miss. The application talks to the cache as if it were the main data source.</li>
+            <li><strong>Write-Through:</strong> When the application writes data, it writes it to the cache and the database at the same time. This ensures that the cache is always consistent with the database, but it adds latency to the write operation.</li>
+            <li><strong>Write-Back (Write-Behind):</strong> The application writes data only to the cache. The cache then asynchronously writes the data to the database after a delay. This is the fastest for write operations, but there is a risk of data loss if the cache fails before the data is written to the database.</li>
+        </ul>
+
+        <h3>Cache Eviction Policies</h3>
+        <p>When the cache is full, some data must be evicted to make room for new data. Common eviction policies include:</p>
+        <ul>
+            <li><strong>Least Recently Used (LRU):</strong> Evicts the data that has not been accessed for the longest time.</li>
+            <li><strong>Least Frequently Used (LFU):</strong> Evicts the data that has been accessed the fewest times.</li>
+            <li><strong>First-In, First-Out (FIFO):</strong> Evicts the data that was added to the cache first.</li>
+        </ul>
+    </div>
+
+</body>
+</html>

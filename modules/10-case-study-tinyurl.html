@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Module 10: Case Study - TinyURL</title>
+    <link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+    <header>
+        <h1>Module 10: Case Study - TinyURL</h1>
+        <a href="../index.html">Back to Home</a>
+    </header>
+
+    <div class="section">
+        <h2>Problem Statement</h2>
+        <p>Design a URL shortening service like TinyURL. The service should take a long URL and generate a unique, short URL. When a user visits the short URL, they should be redirected to the original long URL.</p>
+
+        <h3>Requirements</h3>
+        <ul>
+            <li><strong>Functional:</strong>
+                <ul>
+                    <li>Given a long URL, return a short URL.</li>
+                    <li>Given a short URL, redirect to the original long URL.</li>
+                    <li>The short URL should be a combination of characters `[a-zA-Z0-9]`.</li>
+                </ul>
+            </li>
+            <li><strong>Non-Functional:</strong>
+                <ul>
+                    <li>The service should be highly available.</li>
+                    <li>The redirection should be fast (low latency).</li>
+                    <li>The short URLs should not be guessable.</li>
+                </ul>
+            </li>
+        </ul>
+    </div>
+
+    <div class="section">
+        <h2>High-Level Design</h2>
+        <p>The core of the service is a key-value store where the key is the short URL and the value is the long URL.</p>
+        <ol>
+            <li>The client sends a long URL to the service.</li>
+            <li>The service generates a unique short URL. A common approach is to use a base62 encoding of a counter.</li>
+            <li>The service stores the mapping between the short URL and the long URL in a database.</li>
+            <li>The service returns the short URL to the client.</li>
+        </ol>
+
+        <h3>Redirection</h3>
+        <ol>
+            <li>The user clicks on the short URL.</li>
+            <li>The browser sends an HTTP request to the service.</li>
+            <li>The service looks up the long URL in the database using the short URL as the key.</li>
+            <li>The service sends an HTTP 301 redirect response to the browser with the long URL in the `Location` header.</li>
+            <li>The browser redirects to the long URL.</li>
+        </ol>
+    </div>
+
+    <div class="section">
+        <h2>Further Considerations</h2>
+        <ul>
+            <li><strong>Database Choice:</strong> A NoSQL database like Redis or Cassandra would be a good choice for its fast key-value lookups and scalability.</li>
+            <li><strong>Scalability:</strong> The service can be scaled horizontally by adding more servers behind a load balancer. The database can be sharded to distribute the data.</li>
+            <li><strong>Analytics:</strong> We could add an analytics service that tracks how many times a short URL is clicked.</li>
+        </ul>
+    </div>
+
+</body>
+</html>

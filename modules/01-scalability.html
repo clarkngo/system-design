@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Module 1: Scalability & Elasticity</title>
+    <link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+    <header>
+        <h1>Module 1: Scalability & Elasticity</h1>
+        <a href="../index.html">Back to Home</a>
+    </header>
+
+    <div class="section">
+        <h2>Understanding Scalability</h2>
+        <p>Scalability is the property of a system to handle a growing amount of work by adding resources to the system. It's a critical concept in system design, ensuring that an application or service can perform under increasing demand.</p>
+
+        <h3>Vertical Scaling (Scaling Up)</h3>
+        <p>Vertical scaling involves increasing the capacity of a single server. This means adding more powerful hardware, such as a faster CPU, more RAM, or a larger hard drive.</p>
+        <ul>
+            <li><strong>Pros:</strong> Simplicity. You don't have to manage a distributed system.</li>
+            <li><strong>Cons:</strong> There's a hardware limit to how much you can scale up. It can be very expensive, and it introduces a single point of failure.</li>
+        </ul>
+
+        <h3>Horizontal Scaling (Scaling Out)</h3>
+        <p>Horizontal scaling involves adding more servers to your pool of resources. This is the foundation of modern, large-scale web applications.</p>
+        <ul>
+            <li><strong>Pros:</strong> Almost limitless scalability. It's more cost-effective and resilient to failures.</li>
+            <li><strong>Cons:</strong> Increased complexity. You need to manage a distributed system, which introduces challenges like load balancing, data consistency, and inter-service communication.</li>
+        </ul>
+
+        <h3>The AKF Scale Cube</h3>
+        <p>The book "The Art of Scalability" introduces a 3-dimensional model for scaling called the AKF Scale Cube:</p>
+        <ul>
+            <li><strong>X-axis (Horizontal Duplication):</strong> This is the horizontal scaling described above, where you run multiple copies of your application behind a load balancer.</li>
+            <li><strong>Y-axis (Functional Decomposition):</strong> This involves splitting the application into different services (microservices). For example, you might have separate services for authentication, search, and payments.</li>
+            <li><strong>Z-axis (Data Partitioning / Sharding):</strong> This involves splitting the data across multiple servers. For example, you could shard a user database by the first letter of the user's last name.</li>
+        </ul>
+    </div>
+
+    <div class="section">
+        <h2>Elasticity</h2>
+        <p>Elasticity is the ability of a system to automatically scale resources up and down based on demand. This is a key feature of cloud computing.</p>
+        <p>For example, a video streaming service might experience a surge in traffic during the evening. An elastic system would automatically provision more servers to handle the load and then de-provision them when the traffic subsides, optimizing for both performance and cost.</p>
+        <p>Elasticity is typically achieved through **auto-scaling**, a cloud service that monitors metrics like CPU utilization or network traffic and adjusts the number of active servers accordingly.</p>
+    </div>
+
+</body>
+</html>

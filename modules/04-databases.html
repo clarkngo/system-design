@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Module 4: Databases</title>
+    <link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+    <header>
+        <h1>Module 4: Databases</h1>
+        <a href="../index.html">Back to Home</a>
+    </header>
+
+    <div class="section">
+        <h2>SQL (Relational) vs. NoSQL (Non-Relational)</h2>
+        <p>Choosing the right database is a critical decision in system design.</p>
+
+        <h3>SQL Databases</h3>
+        <p>Examples: MySQL, PostgreSQL, Oracle</p>
+        <ul>
+            <li><strong>Structure:</strong> Data is stored in tables with a predefined schema.</li>
+            <li><strong>Transactions:</strong> Provide ACID (Atomicity, Consistency, Isolation, Durability) guarantees.</li>
+            <li><strong>Use Cases:</strong> Applications that require strong consistency and complex transactions, such as e-commerce and financial systems.</li>
+        </ul>
+
+        <h3>NoSQL Databases</h3>
+        <p>Examples: MongoDB (Document), Cassandra (Wide-column), Redis (Key-value)</p>
+        <ul>
+            <li><strong>Structure:</strong> Flexible schema. Can be document-oriented, key-value, wide-column, or graph-based.</li>
+            <li><strong>Scalability:</strong> Generally scale out horizontally more easily than SQL databases.</li>
+            <li><strong>Use Cases:</strong> Big data, real-time applications, and applications with unstructured or semi-structured data.</li>
+        </ul>
+    </div>
+
+    <div class="section">
+        <h2>Database Scaling Techniques</h2>
+        <ul>
+            <li><strong>Replication:</strong> Creating copies of the database. A common setup is a primary-replica relationship, where writes go to the primary and reads are distributed among the replicas. This improves read performance and provides redundancy.</li>
+            <li><strong>Sharding (Data Partitioning):</strong> Splitting a large database into smaller, more manageable pieces called shards. Each shard has the same schema but holds a different subset of the data. This allows for horizontal scaling of both reads and writes.</li>
+            <li><strong>Indexing:</strong> Creating data structures (indexes) that improve the speed of data retrieval operations on a database table. Indexes are used to quickly locate data without having to search every row in a database table every time a table is accessed.</li>
+        </ul>
+    </div>
+
+</body>
+</html>

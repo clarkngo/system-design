@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Module 6: Content Delivery Network (CDN)</title>
+    <link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+    <header>
+        <h1>Module 6: Content Delivery Network (CDN)</h1>
+        <a href="../index.html">Back to Home</a>
+    </header>
+
+    <div class="section">
+        <h2>How a CDN Works</h2>
+        <p>A Content Delivery Network (CDN) is a geographically distributed network of proxy servers and their data centers. The goal is to provide high availability and performance by distributing the service spatially relative to end-users.</p>
+        <p>When a user requests content from a website that uses a CDN, the CDN redirects the request to a server that is geographically closest to the user. This reduces latency and improves the user experience.</p>
+
+        <h3>Push vs. Pull Zones</h3>
+        <ul>
+            <li><strong>Pull Zone:</strong> The CDN pulls content from your origin server when it's requested for the first time. The content is then cached on the CDN's edge servers for subsequent requests. This is the most common type of CDN.</li>
+            <li><strong>Push Zone:</strong> You upload your content directly to the CDN's storage. This is useful for large files that don't change often, such as video files or software downloads.</li>
+        </ul>
+
+        <h3>Benefits of a CDN</h3>
+        <ul>
+            <li><strong>Improved Performance:</strong> By caching content closer to users, CDNs can significantly reduce page load times.</li>
+            <li><strong>Increased Availability:</strong> CDNs can handle traffic spikes and protect against DDoS attacks.</li>
+            <li><strong>Reduced Load on Origin Server:</strong> By serving content from the cache, CDNs reduce the load on your origin server.</li>
+        </ul>
+    </div>
+
+</body>
+</html>

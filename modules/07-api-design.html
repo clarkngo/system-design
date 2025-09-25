@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Module 7: API Design & Gateways</title>
+    <link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+    <header>
+        <h1>Module 7: API Design & Gateways</h1>
+        <a href="../index.html">Back to Home</a>
+    </header>
+
+    <div class="section">
+        <h2>API Design Paradigms</h2>
+        <ul>
+            <li><strong>REST (Representational State Transfer):</strong> An architectural style that uses a stateless, client-server, cacheable communications protocol — and in virtually all cases, the HTTP protocol. It's the most common approach for building APIs.</li>
+            <li><strong>GraphQL:</strong> A query language for APIs and a runtime for fulfilling those queries with your existing data. It allows clients to request exactly the data they need and nothing more.</li>
+            <li><strong>gRPC (Google Remote Procedure Call):</strong> A high-performance, open-source universal RPC framework. It uses HTTP/2 for transport and Protocol Buffers as the interface description language.</li>
+        </ul>
+    </div>
+
+    <div class="section">
+        <h2>API Gateway</h2>
+        <p>An API gateway is a server that acts as a single entry point into a system. It encapsulates the internal system architecture and provides an API that is tailored to each client.</p>
+        <p>In a microservices architecture, an API gateway is essential for routing requests to the appropriate service, as well as for handling cross-cutting concerns such as:</p>
+        <ul>
+            <li><strong>Authentication and Authorization:</strong> Verifying the identity of the client and ensuring they have permission to access the requested resource.</li>
+            <li><strong>Rate Limiting:</strong> Protecting your services from being overwhelmed with requests.</li>
+            <li><strong>Caching:</strong> Caching responses from services to reduce latency and load.</li>
+            <li><strong>Request and Response Transformation:</strong> Modifying requests and responses as they pass through the gateway.</li>
+        </ul>
+    </div>
+
+</body>
+</html>
