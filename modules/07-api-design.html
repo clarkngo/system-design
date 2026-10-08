@@ -3,35 +3,259 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Module 7: API Design & Gateways</title>
+    <title>07 · The App We Broke — API Design & Gateways</title>
+    <meta name="description" content="Incident 07: a field rename crashes the mobile app, a partner's retries create duplicate orders, and a buggy client floods the API. Learn versioning, idempotency, rate limiting, backoff with jitter, and REST vs GraphQL vs gRPC.">
     <link rel="stylesheet" href="../styles.css">
+    <script>document.documentElement.classList.add('js')</script>
+    <script defer src="../assets/engine.js"></script>
 </head>
-<body>
-    <header>
-        <h1>Module 7: API Design & Gateways</h1>
-        <a href="../index.html">Back to Home</a>
+<body data-module="07">
+<div class="wrap">
+
+    <nav class="topbar"><a href="../index.html">← Year One at Brightcart</a><span>Incident 07 / 10</span></nav>
+
+    <header class="mod-header">
+        <p class="kicker">Month 7 · API Design & Gateways</p>
+        <h1>The App We Broke</h1>
+        <ul class="meta">
+            <li>Role: API platform team</li>
+            <li>3 decisions</li>
+            <li>~15 min</li>
+        </ul>
     </header>
 
-    <div class="section">
-        <h2>API Design Paradigms</h2>
-        <ul>
-            <li><strong>REST (Representational State Transfer):</strong> An architectural style that uses a stateless, client-server, cacheable communications protocol — and in virtually all cases, the HTTP protocol. It's the most common approach for building APIs.</li>
-            <li><strong>GraphQL:</strong> A query language for APIs and a runtime for fulfilling those queries with your existing data. It allows clients to request exactly the data they need and nothing more.</li>
-            <li><strong>gRPC (Google Remote Procedure Call):</strong> A high-performance, open-source universal RPC framework. It uses HTTP/2 for transport and Protocol Buffers as the interface description language.</li>
-        </ul>
+    <div class="pager">
+<div class="line"><span class="ts">Tue 10:40</span>  PR #2291 "Rename price → price_cents for clarity"  <span class="okc">approved ✓ merged</span></div>
+<div class="line"><span class="ts">Tue 11:05</span>  crash reporting: android 4.12.x  <span class="err">NullPointerException ProductCard.bindPrice</span>  crashes/min: <span class="err">2,904</span></div>
+<div class="line"><span class="ts">Tue 11:06</span>  <span class="sev">SEV1</span> app store rating trending ↓  "app crashes on open"</div>
     </div>
 
-    <div class="section">
-        <h2>API Gateway</h2>
-        <p>An API gateway is a server that acts as a single entry point into a system. It encapsulates the internal system architecture and provides an API that is tailored to each client.</p>
-        <p>In a microservices architecture, an API gateway is essential for routing requests to the appropriate service, as well as for handling cross-cutting concerns such as:</p>
-        <ul>
-            <li><strong>Authentication and Authorization:</strong> Verifying the identity of the client and ensuring they have permission to access the requested resource.</li>
-            <li><strong>Rate Limiting:</strong> Protecting your services from being overwhelmed with requests.</li>
-            <li><strong>Caching:</strong> Caching responses from services to reduce latency and load.</li>
-            <li><strong>Request and Response Transformation:</strong> Modifying requests and responses as they pass through the gateway.</li>
-        </ul>
+    <p>Brightcart's public API serves the iOS and Android apps plus about 40 partner integrations. A well-meaning backend engineer renamed <code>price</code> to <code>price_cents</code> in the product response. The web frontend was updated in the same PR. The Android app, which about 30% of users haven't updated in 6 months, wasn't.</p>
+    <p>You can roll back in 5 minutes. The question is what the team does next.</p>
+
+    <aside class="mentor">
+        <div class="avatar">M</div>
+        <div>
+            <p class="who">Morgan · Staff SRE · 14 years on-call</p>
+            <p>An API is a promise to code you don't control and can't redeploy. Your server ships 20 times a day. Someone's phone updates whenever it feels like it. Design for the oldest client still out there.</p>
+        </div>
+    </aside>
+
+    <div class="decision" data-id="d1">
+        <span class="label">Decision 1 · After the rollback</span>
+        <h3>How should the team make changes like this from now on?</h3>
+        <div class="choice" data-verdict="bad">
+            <button type="button">Ship the rename again next week, after the mobile team releases an update.</button>
+            <div class="outcome" hidden>
+                <p>The mobile team releases 4.13, and 30% of users still don't update for months. Next Tuesday, the same crash returns. You can't force-upgrade a phone. Breaking changes have to be opt-in.</p>
+            </div>
+        </div>
+        <div class="choice" data-verdict="ok">
+            <button type="button">Create /v2 for this change, and a new major version for every future response change.</button>
+            <div class="outcome" hidden>
+                <p>Safe, but a year later you're maintaining /v2 through /v9, each with slightly different handlers, test suites and bugs. Versioning is for breaking changes you truly can't avoid. Most changes can be <em>additive</em>.</p>
+            </div>
+        </div>
+        <div class="choice" data-verdict="good">
+            <button type="button">Make changes additive: add <code>price_cents</code> next to <code>price</code>, mark <code>price</code> deprecated, track who still reads it, and remove it only when usage reaches zero (or bump the major version).</button>
+            <div class="outcome" hidden>
+                <p>Old clients keep working, and new clients get the better field. A <code>Deprecation</code> or <code>Sunset</code> header plus usage metrics tell you when removal is safe. Add CI <strong>contract tests</strong> that fail a PR if it removes or renames a field in the public schema, and this class of incident is gone.</p>
+            </div>
+        </div>
     </div>
 
+    <div class="gated" data-after="d1">
+        <p>Month 7, week 3. A large partner, MegaMart, reports something strange: their system shows 1 order, but Brightcart shipped 3 identical ones.</p>
+        <div class="pager">
+<div class="line"><span class="ts">14:02:11.004</span>  POST /orders  partner=megamart  → <span class="okc">201</span> in 11.2s  (order 88121)</div>
+<div class="line"><span class="ts">14:02:21.010</span>  POST /orders  partner=megamart  → <span class="okc">201</span> in 9.8s   (order 88134)   <span class="warn">client timeout=10s, retry 1</span></div>
+<div class="line"><span class="ts">14:02:31.020</span>  POST /orders  partner=megamart  → <span class="okc">201</span> in 4.1s   (order 88140)   <span class="warn">retry 2</span></div>
+        </div>
+        <p>MegaMart's client times out after 10 seconds and retries. But Brightcart's server didn't fail. It was just slow, and completed every attempt.</p>
+
+        <div class="decision" data-id="d2">
+            <span class="label">Decision 2 · Partner escalation</span>
+            <h3>How do you prevent duplicate orders from retries?</h3>
+            <div class="choice" data-verdict="bad">
+                <button type="button">Ask partners not to retry POST requests.</button>
+                <div class="outcome" hidden>
+                    <p>Now when a request genuinely fails (network blip, deploy, load balancer reset), partners just… lose the order. Over an unreliable network, the client can't tell "failed" from "succeeded but the response got lost." Banning retries trades duplicates for lost orders.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="good">
+                <button type="button">Support an <code>Idempotency-Key</code> header: the client sends a unique key per logical order, and the server stores the key with the response and returns the stored response on any repeat.</button>
+                <div class="outcome" hidden>
+                    <p>Retries become safe: the second and third POSTs with the same key return order 88121 instead of creating new ones. Details that matter: scope keys per API client, keep them for 24 hours or more, store the key in the <em>same transaction</em> as the order, and return 409 if a request with the same key is still being processed. This is exactly how Stripe's API works.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="ok">
+                <button type="button">Change the endpoint to <code>PUT /orders/{id}</code>, with the client generating the order ID.</button>
+                <div class="outcome" hidden>
+                    <p>Technically sound: PUT to a client-chosen ID is naturally idempotent. But it's a breaking contract change for 40 partners (see Decision 1), and client-generated IDs need validation against collisions and abuse. A good design for a <em>new</em> API, but a heavy migration for an existing one.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="gated" data-after="d2">
+        <p>Month 7, Friday 17:50. Another partner deploys a bug: their sync job calls <code>GET /products</code> in a tight loop.</p>
+        <div class="pager">
+<div class="line"><span class="ts">17:52</span>  api-gateway rps: <span class="err">31,000</span> (normal 6,000)   <span class="err">83% from key pk_live_quickship</span></div>
+<div class="line"><span class="ts">17:53</span>  products-db cpu <span class="err">96%</span>   mobile app p99 <span class="err">8.1s</span></div>
+        </div>
+        <p>One partner's bug is degrading the API for every customer.</p>
+
+        <div class="decision" data-id="d3">
+            <span class="label">Decision 3 · 17:54</span>
+            <h3>How do you protect everyone else?</h3>
+            <div class="choice" data-verdict="bad">
+                <button type="button">Autoscale the API servers and the database to absorb it.</button>
+                <div class="outcome" hidden>
+                    <p>You're paying to serve a bug. The database can't autoscale in minutes anyway, and the partner's loop gets faster as your responses get faster. By Monday you have an expensive bill and an unhappy DBA.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="good">
+                <button type="button">Enforce per-API-key rate limits at the gateway (token bucket). Return <code>429</code> with <code>Retry-After</code>, and require clients to back off exponentially with jitter.</button>
+                <div class="outcome" hidden>
+                    <p>QuickShip gets its fair share (say 200 req/s with bursts up to 400) and a clear 429. Everyone else is unaffected within a minute. Per-key limits make one tenant's bug that tenant's problem, the core idea of <strong>multi-tenant isolation</strong>. You also email QuickShip, which is the human half of the fix.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="ok">
+                <button type="button">Block QuickShip's IP addresses at the firewall.</button>
+                <div class="outcome" hidden>
+                    <p>It stops the flood, and also their legitimate order traffic, so you've taken a partner fully offline on a Friday evening. Their IPs are cloud NAT addresses shared with another partner, so that partner goes down too. A blunt tool that works, with collateral damage.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="gated" data-after="d3">
+
+        <p class="section-tag">Debrief</p>
+        <h2>What you just learned</h2>
+
+        <div class="card">
+            <h3>REST vs. GraphQL vs. gRPC: when to use each</h3>
+            <div class="table-wrap"><table>
+                <tr><th></th><th>REST</th><th>GraphQL</th><th>gRPC</th></tr>
+                <tr><td>Shape</td><td>Resources + HTTP verbs</td><td>One endpoint; client specifies the fields</td><td>Typed RPC methods (Protocol Buffers over HTTP/2)</td></tr>
+                <tr><td>Strength</td><td>Universal, cacheable, easy to debug</td><td>No over- or under-fetching, one round trip for complex screens</td><td>Fast, strongly typed, streaming, code generation</td></tr>
+                <tr><td>Weakness</td><td>Chatty for complex UIs</td><td>Hard to cache and rate-limit (cost per query varies), N+1 risk</td><td>Not browser-native, harder to inspect</td></tr>
+                <tr><td>Brightcart use</td><td>Public partner API</td><td>Mobile app backend-for-frontend</td><td>Service-to-service internally</td></tr>
+            </table></div>
+        </div>
+
+        <div class="card">
+            <h3>Designing for evolution</h3>
+            <ul>
+                <li><strong>Additive changes are free:</strong> new fields, new endpoints, new optional parameters. Clients must ignore unknown fields.</li>
+                <li><strong>Breaking changes:</strong> removing or renaming fields, changing types or meanings, making something required. These need a new version and a deprecation window.</li>
+                <li><strong>Versioning schemes:</strong> in the URL (<code>/v2/</code>, simple and visible), a header, or date-based (Stripe pins each account to an API version date).</li>
+                <li><strong>Pagination:</strong> prefer <em>cursor</em>-based (<code>?after=abc123</code>) over offset. Offsets get slow on big tables and skip or repeat items when rows are inserted.</li>
+            </ul>
+        </div>
+
+        <div class="card">
+            <h3>Idempotency by HTTP method</h3>
+            <div class="table-wrap"><table>
+                <tr><th>Method</th><th>Idempotent?</th><th>Safe to retry?</th></tr>
+                <tr><td>GET, HEAD</td><td>Yes (and side-effect free)</td><td>Yes</td></tr>
+                <tr><td>PUT, DELETE</td><td>Yes, by spec</td><td>Yes</td></tr>
+                <tr><td>POST, PATCH</td><td>No</td><td>Only with an <code>Idempotency-Key</code></td></tr>
+            </table></div>
+        </div>
+
+        <div class="card">
+            <h3>The API gateway's job</h3>
+            <p>A single entry point that handles cross-cutting concerns so each service doesn't have to: <strong>authentication</strong> (API keys, OAuth/JWT), <strong>rate limiting and quotas</strong> per client, <strong>routing</strong> to services, <strong>request and response transformation</strong>, caching, TLS termination, and metrics per client. Rate-limiting algorithms: <em>token bucket</em> (allows bursts, the common choice), <em>leaky bucket</em> (smooth output), <em>fixed or sliding window</em> counters.</p>
+        </div>
+
+        <div class="card">
+            <h3>Retries: helpful or harmful?</h3>
+            <p>Naive retries <strong>multiply</strong> load exactly when a system is struggling. If 3 layers each retry 3 times, one user request becomes up to 27 backend calls. The rules: retry only idempotent operations, use <strong>exponential backoff with jitter</strong> (random spread so clients don't retry in sync), cap total attempts, use a retry budget (e.g. retries at most 10% of traffic), and honor <code>Retry-After</code>.</p>
+        </div>
+
+        <p class="section-tag">It happened for real</p>
+        <h2>Real postmortems</h2>
+
+        <article class="postmortem">
+            <div class="pm-head"><span>AWS · us-east-1 internal network</span><span class="dur">Dec 7, 2021 · ~7 hours</span></div>
+            <div class="pm-body">
+                <p>An automated activity to scale an internal AWS service triggered unexpected behavior in a large number of clients on the internal network, a surge of connection activity that overwhelmed the networking devices between two networks. The resulting latency and errors caused <strong>even more connection attempts and retries</strong>, which kept the devices congested. The congestion also took out the internal monitoring that engineers needed to diagnose the problem.</p>
+                <p class="lesson"><strong>Lesson:</strong> retries are load. Under stress, clients that retry without backoff, jitter and a budget turn a blip into a sustained outage.</p>
+                <p class="source">Source: <a href="https://aws.amazon.com/message/12721/">AWS: Summary of the AWS Service Event in the Northern Virginia (US-EAST-1) Region</a></p>
+            </div>
+        </article>
+
+        <article class="postmortem">
+            <div class="pm-head"><span>AWS Architecture Blog · Exponential Backoff and Jitter</span><span class="dur">2015</span></div>
+            <div class="pm-body">
+                <p>Marc Brooker simulated clients competing for a contended resource and showed that exponential backoff <em>alone</em> still produces synchronized waves of retries. Adding randomness ("full jitter": sleep a random time between 0 and the backoff cap) dramatically reduced both total work and completion time.</p>
+                <p class="lesson"><strong>Lesson:</strong> <code>sleep = random(0, min(cap, base × 2^attempt))</code>. Memorize it, and put it in every client SDK you ship.</p>
+                <p class="source">Source: <a href="https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/">AWS Architecture Blog: Exponential Backoff And Jitter</a></p>
+            </div>
+        </article>
+
+        <article class="postmortem">
+            <div class="pm-head"><span>Stripe · Idempotency keys in practice</span><span class="dur">2017</span></div>
+            <div class="pm-body">
+                <p>Stripe's API accepts an <code>Idempotency-Key</code> on every POST and stores the result, so clients can retry safely after any network failure. Their write-up covers the design, including why the client generates the key and how to combine it with backoff.</p>
+                <p class="source">Source: <a href="https://stripe.com/blog/idempotency">Stripe: Designing robust and predictable APIs with idempotency</a></p>
+            </div>
+        </article>
+
+        <p class="section-tag">Field notes</p>
+        <h2>Morgan's rules of thumb</h2>
+        <ol class="rules">
+            <li>Never remove or rename a public field. Add, deprecate, measure, then remove.</li>
+            <li>Every POST that creates something takes an idempotency key.</li>
+            <li>Rate-limit per client, not globally. One tenant's bug shouldn't be everyone's outage.</li>
+            <li>Retries need backoff, jitter and a budget, or they become a DDoS on yourself.</li>
+            <li>Use cursor pagination. Offset pagination is a slow query waiting to happen.</li>
+        </ol>
+
+        <p class="section-tag">Your turn</p>
+        <h2>Design challenge</h2>
+        <div class="card">
+            <p><strong>Design Brightcart's public Orders API v1</strong> for partners: create an order, get an order, list a partner's orders (millions of them), cancel an order, and get notified when an order ships.</p>
+            <p>Define the endpoints, the idempotency approach, pagination, error format, rate limits, and how partners learn about shipping without polling.</p>
+        </div>
+        <details>
+            <summary>Hints</summary>
+            <ul>
+                <li>"Cancel" is a state transition. Should it be <code>DELETE</code> or <code>POST /orders/{id}/cancel</code>?</li>
+                <li>Webhooks also need retries, signatures and idempotency on the <em>receiving</em> side.</li>
+            </ul>
+        </details>
+        <details>
+            <summary>What a strong answer covers</summary>
+            <ul>
+                <li><code>POST /v1/orders</code> with an Idempotency-Key, <code>GET /v1/orders/{id}</code>, <code>GET /v1/orders?after=cursor&amp;limit=100</code>, and <code>POST /v1/orders/{id}/cancel</code> (idempotent).</li>
+                <li>A consistent error format with a machine-readable code, and 429s with Retry-After.</li>
+                <li>Signed webhooks with event IDs (so receivers can deduplicate), retries with backoff, and an events list endpoint to catch up.</li>
+                <li>A versioning and deprecation policy published from day one.</li>
+            </ul>
+        </details>
+
+        <p class="section-tag">Live drill</p>
+        <h2>Run it again with a real Game Master</h2>
+        <div class="drill">
+            <pre id="drill">Act as Morgan, a Staff engineer running a live simulation. I'm on the API platform team at an e-commerce company with a public partner API and mobile apps. Throw a sequence of realistic problems at me: a breaking change that crashes old app versions, duplicate orders from client retries, and a buggy partner flooding the API. Narrate with logs and metrics, make me decide, and play out consequences. Then have me review a proposed API design and push back on my choices. Cover versioning, idempotency, pagination, rate limiting, backoff with jitter, REST vs GraphQL vs gRPC. End with a debrief and grade me.</pre>
+            <button class="copy" type="button" data-copy="drill">Copy</button>
+        </div>
+
+        <div class="scoreboard">
+            <h3>Incident resolved</h3>
+            <p data-score></p>
+            <button type="button" data-reset>Replay this incident</button>
+        </div>
+    </div>
+
+    <nav class="modnav">
+        <a href="06-cdn.html"><small>← Previous</small>The Cache That Leaked Accounts</a>
+        <a class="next" href="08-consistency-models.html"><small>Next incident →</small>Split Brain</a>
+    </nav>
+
+</div>
 </body>
 </html>

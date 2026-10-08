@@ -3,34 +3,238 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Module 9: Distributed Storage</title>
+    <title>09 · One Typo, Four Hours — Distributed Storage</title>
+    <meta name="description" content="Incident 09: a file server is nearly full, replicas share a rack, and a capacity-removal command has a typo. Learn object vs block vs file storage, HDFS/GFS, replication vs erasure coding, failure domains and blast radius.">
     <link rel="stylesheet" href="../styles.css">
+    <script>document.documentElement.classList.add('js')</script>
+    <script defer src="../assets/engine.js"></script>
 </head>
-<body>
-    <header>
-        <h1>Module 9: Distributed Storage</h1>
-        <a href="../index.html">Back to Home</a>
+<body data-module="09">
+<div class="wrap">
+
+    <nav class="topbar"><a href="../index.html">← Year One at Brightcart</a><span>Incident 09 / 10</span></nav>
+
+    <header class="mod-header">
+        <p class="kicker">Month 10 · Distributed Storage</p>
+        <h1>One Typo, Four Hours</h1>
+        <ul class="meta">
+            <li>Role: platform / storage rotation</li>
+            <li>3 decisions</li>
+            <li>~15 min</li>
+        </ul>
     </header>
 
-    <div class="section">
-        <h2>Types of Distributed Storage</h2>
-        <ul>
-            <li><strong>Object Storage:</strong> Data is managed as objects. Each object includes the data itself, a variable amount of metadata, and a globally unique identifier. Examples: Amazon S3, Google Cloud Storage.</li>
-            <li><strong>Block Storage:</strong> Data is stored in blocks, which are fixed-size chunks of data. This is used by storage area networks (SANs) and is suitable for databases and other transactional workloads. Examples: Amazon EBS, Google Persistent Disk.</li>
-            <li><strong>File Storage:</strong> Data is stored in a hierarchical structure of files and folders. This is what you typically interact with on your personal computer. Examples: Network Attached Storage (NAS), Amazon EFS.</li>
-        </ul>
+    <div class="pager">
+<div class="line"><span class="ts">Wed 08:30</span>  nfs-media-01  disk usage <span class="err">92%</span>  (40.3 TB / 44 TB)   growth: +1.6 TB/month</div>
+<div class="line"><span class="ts">Wed 08:30</span>  nfs-media-01  NFS ops latency p99 <span class="warn">410ms</span>   clients mounted: 64 app servers</div>
+<div class="line"><span class="ts">Wed 08:31</span>  <b>@morgan</b>: That box has about 10 weeks left, and it's a single machine every app server depends on. Your project now.</div>
     </div>
 
-    <div class="section">
-        <h2>HDFS (Hadoop Distributed File System)</h2>
-        <p>HDFS is a distributed file system designed to run on commodity hardware. It is highly fault-tolerant and is designed to be deployed on low-cost hardware.</p>
-        <p>Key features of HDFS:</p>
-        <ul>
-            <li><strong>Large Data Sets:</strong> HDFS is designed to support very large files.</li>
-            <li><strong>Streaming Data Access:</strong> HDFS is built around the idea that the most efficient data processing pattern is a write-once, read-many-times pattern.</li>
-            <li><strong>Fault Tolerance:</strong> HDFS is designed to detect faults and to automatically and quickly recover from them. Data is replicated across multiple nodes to protect against data loss.</li>
-        </ul>
+    <p>Every seller photo, product video and invoice PDF Brightcart has ever stored lives on one NFS file server, mounted by all 64 app servers. It's 40 TB, growing 1.6 TB a month, and has one power supply away from being the worst day of your career.</p>
+
+    <aside class="mentor">
+        <div class="avatar">M</div>
+        <div>
+            <p class="who">Morgan · Staff SRE · 14 years on-call</p>
+            <p>Storage is where "eventually we'll fix it" becomes "we lost customer data." Three questions for any storage design: <em>what's the access pattern, what failures does it survive, and what's the blast radius when an operator gets it wrong?</em> That last one is the one people forget.</p>
+        </div>
+    </aside>
+
+    <div class="decision" data-id="d1">
+        <span class="label">Decision 1 · Migration plan</span>
+        <h3>Where should 40 TB of photos, videos and PDFs live?</h3>
+        <div class="choice" data-verdict="ok">
+            <button type="button">Buy a bigger NAS appliance with 200 TB and dual controllers.</button>
+            <div class="outcome" hidden>
+                <p>That buys about 8 years of headroom and fixes the single power supply. But it's still a shared POSIX filesystem mounted by 64 servers: one bad client can lock it up, scaling past one appliance is painful, and serving images to users still goes through your app servers. A sturdier version of the same architecture.</p>
+            </div>
+        </div>
+        <div class="choice" data-verdict="good">
+            <button type="button">Object storage (S3, GCS or self-hosted MinIO/Ceph) with a CDN in front. The database stores only object keys and metadata.</button>
+            <div class="outcome" hidden>
+                <p>Photos are write-once, read-many blobs addressed by key, which is exactly what object storage is for. It scales to petabytes without you managing disks, replicates across failure domains, and the CDN serves images straight to users without touching your app servers. Uploads go directly from the browser to storage using pre-signed URLs.</p>
+            </div>
+        </div>
+        <div class="choice" data-verdict="bad">
+            <button type="button">Attach a big block-storage volume to each app server and store the files there.</button>
+            <div class="outcome" hidden>
+                <p>A block volume generally attaches to one server at a time, so a photo uploaded to server 12 doesn't exist on server 40. You'd have to build your own replication and lookup layer, which means writing a distributed file system by accident. Block storage is for databases and boot disks, not shared media.</p>
+            </div>
+        </div>
     </div>
 
+    <div class="gated" data-after="d1">
+        <p>The CFO wants cheaper storage for 7 years of invoice PDFs (compliance archive, rarely read, legally required to keep). The team decides to run a small self-hosted object store on 12 servers across <strong>2 racks in one data center</strong> and 2 more racks in a second site. How should the data be protected?</p>
+
+        <div class="decision" data-id="d2">
+            <span class="label">Decision 2 · Durability design</span>
+            <h3>How do you protect the archive?</h3>
+            <div class="choice" data-verdict="bad">
+                <button type="button">3 replicas of every object, placed on the three least-full disks.</button>
+                <div class="outcome" hidden>
+                    <p>"Least-full disks" turn out to be the three new disks someone just installed, all in the <strong>same rack</strong>. Eight months later that rack's top-of-rack switch and power distribution unit fail together. All 3 copies of 140,000 invoices are unreachable at once, and two disks don't come back. Replicas only help if they fail <em>independently</em>.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="good">
+                <button type="button">Erasure coding (e.g. 8 data + 4 parity chunks) spread across racks and both sites, so no single rack or site holds enough chunks to matter.</button>
+                <div class="outcome" hidden>
+                    <p>Each object is split into 12 chunks, any 8 of which can rebuild it. Placement is <strong>failure-domain aware</strong>, so losing a disk, a server or a whole rack costs only a few chunks. Storage overhead is 1.5x instead of 3x. The trade-off is that reads and rebuilds need CPU and touch many servers, which is fine for a cold archive.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="ok">
+                <button type="button">3 replicas, each on a different rack.</button>
+                <div class="outcome" hidden>
+                    <p>Solid durability with rack-aware placement, and simple, fast reads. But it costs 3x the raw storage for data almost nobody reads, and all three copies are still in one or two sites. Correct, expensive, and fine if budget isn't tight.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="gated" data-after="d2">
+        <p>Month 10, Tuesday 09:35. The billing subsystem of your object store is running slow. The runbook says to remove a few servers from the billing pool and let them be re-provisioned. It's a routine command the team has run dozens of times:</p>
+        <pre>$ storectl remove-capacity --pool billing --count 2</pre>
+        <p>Your teammate types it out and shares their screen. You notice the command says <code>--count 20</code>. And the billing pool shares servers with the <strong>index</strong> subsystem: the metadata layer that knows where every object lives.</p>
+
+        <div class="decision" data-id="d3">
+            <span class="label">Decision 3 · 09:37 · Enter not yet pressed</span>
+            <h3>The typo is caught this time. What do you change so it can't happen next time?</h3>
+            <div class="choice" data-verdict="ok">
+                <button type="button">Fix the typo, run it, and remind everyone to double-check their commands.</button>
+                <div class="outcome" hidden>
+                    <p>You caught it today because you happened to be watching. "Be more careful" isn't a control. People get tired, and someone will make this mistake at 2am. Same tool, same risk, next month.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="good">
+                <button type="button">Change the tool: remove capacity slowly, refuse to drop any subsystem below its minimum safe capacity, show a dry-run summary of what will be affected, and require a second approver above a threshold.</button>
+                <div class="outcome" hidden>
+                    <p>You moved safety from human memory into the system. Even a fat-fingered <code>--count 200</code> now removes servers gradually and stops at the floor. The dry run prints "This will remove 9 servers from the <strong>index</strong> subsystem" in red. This is almost exactly what AWS did after the real version of this incident.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="bad">
+                <button type="button">Only run capacity changes at night, when traffic is low.</button>
+                <div class="outcome" hidden>
+                    <p>Low traffic doesn't make a bad command safe. If the index layer loses too much capacity, it needs a full restart whether it's 3am or 3pm, and nobody has restarted it in years. The difference is that at 3am, fewer people are awake to help.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="gated" data-after="d3">
+
+        <p class="section-tag">Debrief</p>
+        <h2>What you just learned</h2>
+
+        <div class="card">
+            <h3>Object vs. block vs. file storage</h3>
+            <div class="table-wrap"><table>
+                <tr><th></th><th>Object</th><th>Block</th><th>File</th></tr>
+                <tr><td>Unit</td><td>Whole object + metadata, by key</td><td>Fixed-size blocks, like a raw disk</td><td>Files in directories (POSIX)</td></tr>
+                <tr><td>Access</td><td>HTTP API (PUT/GET), many clients</td><td>One server mounts it</td><td>Many servers mount it (NFS/SMB)</td></tr>
+                <tr><td>Scale</td><td>Effectively unlimited</td><td>Volume-sized</td><td>Appliance or cluster-sized</td></tr>
+                <tr><td>Examples</td><td>S3, GCS, Azure Blob, MinIO, Ceph RGW</td><td>EBS, Persistent Disk, SAN</td><td>NFS, EFS, NAS</td></tr>
+                <tr><td>Use for</td><td>Media, backups, data lakes, static assets</td><td>Databases, VM boot disks</td><td>Legacy apps, shared home directories</td></tr>
+            </table></div>
+        </div>
+
+        <div class="card">
+            <h3>How distributed file systems work (GFS / HDFS)</h3>
+            <ul>
+                <li>Files are split into large <strong>chunks/blocks</strong> (64 MB in GFS, 128 MB by default in HDFS).</li>
+                <li>A <strong>metadata server</strong> (GFS master / HDFS NameNode) knows which servers hold which chunks. <strong>Data servers</strong> (chunkservers / DataNodes) store the bytes.</li>
+                <li>Clients ask the metadata server <em>where</em> the data is, then read it <em>directly</em> from the data servers, so the metadata server stays out of the data path.</li>
+                <li>Chunks are replicated 3x by default, with <strong>rack-aware</strong> placement.</li>
+                <li>Designed for write-once, read-many, large streaming reads (batch analytics). Bad at lots of tiny files and random writes.</li>
+                <li>The metadata service is the critical piece. It's what the AWS incident below took out.</li>
+            </ul>
+        </div>
+
+        <div class="card">
+            <h3>Durability: replication vs. erasure coding</h3>
+            <div class="table-wrap"><table>
+                <tr><th></th><th>3x replication</th><th>Erasure coding (e.g. 8+4)</th></tr>
+                <tr><td>Storage overhead</td><td>3.0x</td><td>1.5x</td></tr>
+                <tr><td>Survives</td><td>2 lost copies</td><td>Any 4 lost chunks</td></tr>
+                <tr><td>Read cost</td><td>Read from any one copy, fast</td><td>Read from several nodes. Reconstruction costs CPU</td></tr>
+                <tr><td>Best for</td><td>Hot data, small objects</td><td>Warm or cold data, large objects, archives</td></tr>
+            </table></div>
+            <p>Either way, <strong>failure domains</strong> matter more than the number of copies: disk → server → rack → power and network zone → building → region. Correlated failures (same rack, same firmware bug, same operator command) are what actually lose data.</p>
+        </div>
+
+        <p class="section-tag">It happened for real</p>
+        <h2>Real postmortems</h2>
+
+        <article class="postmortem">
+            <div class="pm-head"><span>Amazon S3 · us-east-1</span><span class="dur">Feb 28, 2017 · ~4 hours</span></div>
+            <div class="pm-body">
+                <p>At 9:37 AM PST, an authorized S3 team member following an established playbook ran a command to remove a small number of servers from a subsystem used by S3 billing. <strong>One of the inputs was entered incorrectly</strong>, and a much larger set of servers was removed, including servers supporting the <strong>index</strong> subsystem (the metadata for every object in the region) and the <strong>placement</strong> subsystem (which allocates storage for new objects). Both needed a full restart, which hadn't been done in the larger regions for many years, and took hours given S3's growth. S3 wasn't fully recovered until 1:54 PM. Even AWS's Service Health Dashboard couldn't be updated, because its admin console depended on S3.</p>
+                <p>AWS's fix: change the tool to remove capacity more slowly, and add safeguards so capacity can't be removed below a subsystem's minimum required level.</p>
+                <p class="lesson"><strong>Lesson:</strong> Decision 3, almost word for word. Design tools so the dangerous input is impossible, not merely discouraged. Restart your critical subsystems regularly, so you know how long it takes. And don't host your status page on the thing it reports on.</p>
+                <p class="source">Source: <a href="https://aws.amazon.com/message/41926/">AWS: Summary of the Amazon S3 Service Disruption in the Northern Virginia (US-EAST-1) Region</a></p>
+            </div>
+        </article>
+
+        <article class="postmortem">
+            <div class="pm-head"><span>Google · The Google File System</span><span class="dur">SOSP 2003</span></div>
+            <div class="pm-body">
+                <p>The GFS paper starts from a striking premise: with thousands of commodity machines, <strong>component failure is the norm, not the exception</strong>. So the design assumes disks, machines and networks fail constantly, and builds in replication, checksums and automatic re-replication. It became the blueprint for HDFS and much of modern big-data storage.</p>
+                <p class="lesson"><strong>Lesson:</strong> at scale, failure is a constant background condition, not an event. Design for it, monitor for it, and let the system repair itself.</p>
+                <p class="source">Source: <a href="https://static.googleusercontent.com/media/research.google.com/en//archive/gfs-sosp2003.pdf">The Google File System (PDF)</a></p>
+            </div>
+        </article>
+
+        <p class="section-tag">Field notes</p>
+        <h2>Morgan's rules of thumb</h2>
+        <ol class="rules">
+            <li>Blobs go in object storage. Only keys and metadata go in your database.</li>
+            <li>Count failure domains, not copies. Three replicas in one rack is one replica.</li>
+            <li>Safety belongs in the tool, not in "be careful": rate limits, floors, dry runs, approvals.</li>
+            <li>If you haven't restarted it recently, you don't know how long a restart takes.</li>
+            <li>Your status page must not depend on what it's reporting on.</li>
+        </ol>
+
+        <p class="section-tag">Your turn</p>
+        <h2>Design challenge</h2>
+        <div class="card">
+            <p><strong>Design Brightcart's seller photo pipeline.</strong> Sellers upload 2 million photos a day (up to 25 MB each). Each photo needs 5 resized variants (thumbnail to zoom), served worldwide. Photos for deleted listings must be purged within 30 days (privacy law). Lost photos mean angry sellers.</p>
+            <p>Sketch the upload path, processing, storage layout, serving path, and deletion.</p>
+        </div>
+        <details>
+            <summary>Hints</summary>
+            <ul>
+                <li>Should a 25 MB upload pass through your app servers at all? (Pre-signed URLs.)</li>
+                <li>Resizing is async work: queue, workers, idempotency (Incident 05).</li>
+                <li>Do you store all 5 variants, or generate some on demand at the edge?</li>
+            </ul>
+        </details>
+        <details>
+            <summary>What a strong answer covers</summary>
+            <ul>
+                <li>Browser → pre-signed PUT → object store. An object-created event → queue → idempotent resize workers.</li>
+                <li>Originals and variants in object storage with lifecycle rules (cheaper tier for old originals), and a CDN for serving with content-addressed keys.</li>
+                <li>Deletion via soft delete, then a lifecycle or batch job within 30 days, plus CDN purge and verification.</li>
+                <li>Cross-region replication or erasure coding for durability, and versioning against accidental deletes.</li>
+            </ul>
+        </details>
+
+        <p class="section-tag">Live drill</p>
+        <h2>Run it again with a real Game Master</h2>
+        <div class="drill">
+            <pre id="drill">Act as Morgan, a Staff SRE running a live simulation on storage systems. I own storage at an e-commerce company. Walk me through: migrating 40TB of media off a single NFS server, designing durability for a compliance archive (replication vs erasure coding, failure domains), a rack failure, and an operational near-miss with a capacity-removal command. Narrate with metrics and logs, make me decide, play out realistic consequences (including data loss), don't hint. Cover object vs block vs file, GFS/HDFS architecture, metadata services, blast radius. End with a postmortem and grade me.</pre>
+            <button class="copy" type="button" data-copy="drill">Copy</button>
+        </div>
+
+        <div class="scoreboard">
+            <h3>Incident resolved</h3>
+            <p data-score></p>
+            <button type="button" data-reset>Replay this incident</button>
+        </div>
+    </div>
+
+    <nav class="modnav">
+        <a href="08-consistency-models.html"><small>← Previous</small>Split Brain</a>
+        <a class="next" href="10-case-study-tinyurl.html"><small>Final chapter →</small>Your First Design Review</a>
+    </nav>
+
+</div>
 </body>
 </html>

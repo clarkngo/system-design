@@ -3,35 +3,247 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Module 3: Caching Strategies</title>
+    <title>03 · The Night the Cache Went Cold — Caching</title>
+    <meta name="description" content="Incident 03: Redis restarts empty and the database melts. Learn cache-aside, read-through, write-through, write-back, eviction, stampedes and invalidation by fighting a cache outage.">
     <link rel="stylesheet" href="../styles.css">
+    <script>document.documentElement.classList.add('js')</script>
+    <script defer src="../assets/engine.js"></script>
 </head>
-<body>
-    <header>
-        <h1>Module 3: Caching Strategies</h1>
-        <a href="../index.html">Back to Home</a>
+<body data-module="03">
+<div class="wrap">
+
+    <nav class="topbar"><a href="../index.html">← Year One at Brightcart</a><span>Incident 03 / 10</span></nav>
+
+    <header class="mod-header">
+        <p class="kicker">Month 2 · Caching</p>
+        <h1>The Night the Cache Went Cold</h1>
+        <ul class="meta">
+            <li>Role: primary on-call</li>
+            <li>3 decisions</li>
+            <li>~15 min</li>
+        </ul>
     </header>
 
-    <div class="section">
-        <h2>The Role of Caching</h2>
-        <p>Caching is a technique used to store frequently accessed data in a temporary storage location (a cache) that is faster to access than the primary data source. The goal is to reduce latency and the load on the backend system.</p>
-
-        <h3>Common Caching Strategies</h3>
-        <ul>
-            <li><strong>Cache-Aside (Lazy Loading):</strong> The application is responsible for loading data into the cache. When a request comes in, the application first checks the cache. If the data is there (a cache hit), it's returned to the client. If not (a cache miss), the application fetches the data from the database, stores it in the cache, and then returns it.</li>
-            <li><strong>Read-Through:</strong> The cache itself is responsible for fetching data from the database on a cache miss. The application talks to the cache as if it were the main data source.</li>
-            <li><strong>Write-Through:</strong> When the application writes data, it writes it to the cache and the database at the same time. This ensures that the cache is always consistent with the database, but it adds latency to the write operation.</li>
-            <li><strong>Write-Back (Write-Behind):</strong> The application writes data only to the cache. The cache then asynchronously writes the data to the database after a delay. This is the fastest for write operations, but there is a risk of data loss if the cache fails before the data is written to the database.</li>
-        </ul>
-
-        <h3>Cache Eviction Policies</h3>
-        <p>When the cache is full, some data must be evicted to make room for new data. Common eviction policies include:</p>
-        <ul>
-            <li><strong>Least Recently Used (LRU):</strong> Evicts the data that has not been accessed for the longest time.</li>
-            <li><strong>Least Frequently Used (LFU):</strong> Evicts the data that has been accessed the fewest times.</li>
-            <li><strong>First-In, First-Out (FIFO):</strong> Evicts the data that was added to the cache first.</li>
-        </ul>
+    <div class="pager">
+<div class="line"><span class="ts">23:41</span>  infra: kernel patch rollout → redis-prod-1 rebooted <span class="okc">(planned)</span></div>
+<div class="line"><span class="ts">23:42</span>  redis-prod-1  keys: <span class="err">0</span>   hit rate: <span class="err">0.0%</span>  (was 97.8%)</div>
+<div class="line"><span class="ts">23:43</span>  postgres-primary cpu <span class="err">100%</span>   active queries 1,912</div>
+<div class="line"><span class="ts">23:44</span>  <span class="sev">SEV1</span> product-page p99 <span class="err">14.2s</span>   error rate 22%</div>
     </div>
 
+    <p>Brightcart's product pages read through a cache-aside layer in Redis. On a cache miss, the app queries Postgres, writes the result to Redis with a 1-hour TTL, and returns it. Hit rate is normally 97.8%, so the database only ever sees about 2% of reads.</p>
+    <p>A planned kernel patch just rebooted Redis, and Redis came back <strong>empty</strong>. Now the database sees 100% of reads, about 50 times its normal load.</p>
+
+    <aside class="mentor">
+        <div class="avatar">M</div>
+        <div>
+            <p class="who">Morgan · Staff SRE · 14 years on-call</p>
+            <p>Here's the thing nobody tells you: the day your cache hit rate passes about 90%, the cache stops being an optimization and becomes <em>load-bearing</em>. Your database can no longer survive without it. We just found out the hard way. What now?</p>
+        </div>
+    </aside>
+
+    <div class="decision" data-id="d1">
+        <span class="label">Decision 1 · 23:45</span>
+        <h3>The database is drowning in cache misses. What's your first move?</h3>
+        <div class="choice" data-verdict="bad">
+            <button type="button">Restart all the app servers to clear stuck connections.</button>
+            <div class="outcome" hidden>
+                <p>Every app server reconnects to Postgres at once, so you've added a <strong>connection storm</strong> to a query storm. The restart also wipes each server's in-process local cache, the one thing that was still absorbing some load. p99 goes from 14s to timeouts.</p>
+            </div>
+        </div>
+        <div class="choice" data-verdict="good">
+            <button type="button">Turn on request coalescing so only one request per key goes to the database, and rate-limit traffic to origin until the hit rate recovers.</button>
+            <div class="outcome" hidden>
+                <p>When 5,000 users ask for the same hot product at once, coalescing (also called <strong>single-flight</strong>) sends one query and makes the other 4,999 wait for its result. Database queries drop by about 90% in a minute. The rate limit protects the database while the cache refills. Hit rate climbs back to 90% by 23:58.</p>
+                <p>Morgan: "That's the move. You fixed the <em>shape</em> of the load, not just its size."</p>
+            </div>
+        </div>
+        <div class="choice" data-verdict="ok">
+            <button type="button">Spin up 3 more Postgres read replicas to absorb the reads.</button>
+            <div class="outcome" hidden>
+                <p>Reasonable instinct, wrong timescale. Creating a replica from a snapshot and catching up takes about 40 minutes, and the new replicas start with cold buffer caches, so they're slow at first too. By the time they're ready, the Redis cache has mostly refilled on its own. Good long-term idea, useless in this incident.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="gated" data-after="d1">
+        <p>Things recover by midnight. But reviewing the graphs the next morning, you notice something odd from <em>before</em> the incident: every hour, right on the hour, database CPU spikes to 85% for about 40 seconds.</p>
+
+        <div class="pager">
+<div class="line"><span class="ts">09:00:00</span>  postgres cpu <span class="warn">84%</span>   cache misses/s 11,400</div>
+<div class="line"><span class="ts">10:00:00</span>  postgres cpu <span class="warn">86%</span>   cache misses/s 11,900</div>
+<div class="line"><span class="ts">11:00:00</span>  postgres cpu <span class="warn">85%</span>   cache misses/s 11,700</div>
+        </div>
+        <p>The catalog warm-up job loads all products into Redis at deploy time, every key with <code>TTL = 3600</code>. So they all expire at the same second.</p>
+
+        <div class="decision" data-id="d2">
+            <span class="label">Decision 2 · Next morning</span>
+            <h3>How do you fix the hourly spike?</h3>
+            <div class="choice" data-verdict="ok">
+                <button type="button">Raise the TTL to 24 hours so expiries happen less often.</button>
+                <div class="outcome" hidden>
+                    <p>The hourly spike becomes a <em>daily</em> spike, and a bigger one, because more traffic has piled up behind it. Meanwhile prices and stock counts can now be stale for up to a day. You traded frequency for size and correctness.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="good">
+                <button type="button">Add random jitter to every TTL (e.g. 3600 ± 600s), and refresh hot keys early in the background before they expire.</button>
+                <div class="outcome" hidden>
+                    <p>Jitter spreads the expiries across 20 minutes instead of one second, so the spike flattens into noise. Early refresh (sometimes called <em>probabilistic early expiration</em>) means hot keys almost never actually miss. Database CPU at the top of the hour: 31%.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="bad">
+                <button type="button">Remove the TTL entirely and only update keys when the data changes.</button>
+                <div class="outcome" hidden>
+                    <p>Now every bug in your invalidation code becomes <em>permanent</em> stale data. Three weeks later, a product whose price changed during a failed deploy shows the old price until someone notices. Memory also fills up with products nobody views. A TTL is your safety net. Keep it.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="gated" data-after="d2">
+        <p>Month 3. A support escalation: a customer bought a $129 jacket for <strong>$12.90</strong>. The merchandising team fixed a typo'd price within a minute, but the site kept showing $12.90 for another hour. You look at the write path:</p>
+        <pre>// on price update
+db.update(product)
+cache.set(product.id, product)   // refresh cache</pre>
+        <p>Two admins edited the price within milliseconds of each other, and the <em>older</em> write's <code>cache.set</code> landed last.</p>
+
+        <div class="decision" data-id="d3">
+            <span class="label">Decision 3 · Escalation</span>
+            <h3>How should writes interact with the cache?</h3>
+            <div class="choice" data-verdict="good">
+                <button type="button">Write to the database, then <strong>delete</strong> the cache key. The next read fetches the fresh value. Keep the TTL as a backstop.</button>
+                <div class="outcome" hidden>
+                    <p>Deleting instead of setting means the cache never holds a value the writer <em>thought</em> was current. It only ever holds what a reader actually got from the database. This is what Facebook's memcache does. (A rare race remains, a slow reader repopulating stale data, which Facebook closes with <strong>leases</strong>. See below.)</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="bad">
+                <button type="button">Switch to write-back: write prices to Redis first and flush them to Postgres every 30 seconds.</button>
+                <div class="outcome" hidden>
+                    <p>Writes are now fast, but Redis is the source of truth for up to 30 seconds. The next time Redis reboots (you know it will), those price changes and any orders that relied on them are <strong>gone</strong>. Write-back is for data you can afford to lose: view counters, analytics. Never money.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="ok">
+                <button type="button">Switch to write-through: a cache layer writes to Postgres and Redis together on every update.</button>
+                <div class="outcome" hidden>
+                    <p>Better consistency for the single-writer case, and reads are always warm. But two concurrent writers can still interleave and leave the cache disagreeing with the database. Plus every write now pays for two systems, and products nobody reads still fill the cache. Survivable, but it doesn't actually fix the race.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="gated" data-after="d3">
+
+        <p class="section-tag">Debrief</p>
+        <h2>What you just learned</h2>
+
+        <div class="card">
+            <h3>The four caching patterns</h3>
+            <div class="table-wrap"><table>
+                <tr><th>Pattern</th><th>Read path</th><th>Write path</th><th>Use when</th><th>Danger</th></tr>
+                <tr><td><strong>Cache-aside</strong> (lazy loading)</td><td>App checks cache; on miss, reads DB and fills the cache</td><td>App writes DB, then deletes the key</td><td>Default choice. Most web apps</td><td>Stampedes on cold start</td></tr>
+                <tr><td><strong>Read-through</strong></td><td>Cache loads from DB on miss itself</td><td>Usually paired with write-through</td><td>When a library or proxy owns the cache</td><td>Same stampede risk, now hidden</td></tr>
+                <tr><td><strong>Write-through</strong></td><td>Always warm</td><td>Cache and DB written synchronously</td><td>Read-after-write heavy data</td><td>Slower writes, cache fills with unread data</td></tr>
+                <tr><td><strong>Write-back</strong> (write-behind)</td><td>Always warm</td><td>Cache first, DB later (async)</td><td>Counters, metrics, loss-tolerant data</td><td><strong>Data loss</strong> if the cache dies</td></tr>
+            </table></div>
+        </div>
+
+        <div class="card">
+            <h3>Eviction and expiry</h3>
+            <ul>
+                <li><strong>LRU</strong> (least recently used): evict whatever hasn't been touched longest. A good default, and Redis's <code>allkeys-lru</code>.</li>
+                <li><strong>LFU</strong> (least frequently used): evict the least popular. Resists one-off scans that flush hot keys out of an LRU cache.</li>
+                <li><strong>FIFO</strong>: evict the oldest insertion. Simple and rarely optimal.</li>
+                <li><strong>TTL</strong>: time-based expiry, your safety net against invalidation bugs. <em>Always add jitter.</em></li>
+            </ul>
+        </div>
+
+        <div class="card">
+            <h3>The stampede (thundering herd) toolkit</h3>
+            <ul>
+                <li><strong>Request coalescing / single-flight:</strong> one database fetch per key, everyone else waits on it.</li>
+                <li><strong>TTL jitter:</strong> never let a million keys expire in the same second.</li>
+                <li><strong>Early or background refresh:</strong> refresh hot keys before they expire.</li>
+                <li><strong>Leases</strong> (Facebook's memcache): on a miss, the cache gives one client a token to fill the key; others wait or get slightly stale data. Fixes stampedes <em>and</em> stale sets.</li>
+                <li><strong>Serve stale on error:</strong> an hour-old price is usually better than a 500 page.</li>
+                <li><strong>Capacity rule:</strong> once the cache is load-bearing, plan database capacity for a cold cache, or make sure the cache can never go cold all at once (replicas, persistence, gradual restarts).</li>
+            </ul>
+        </div>
+
+        <p class="section-tag">It happened for real</p>
+        <h2>Real postmortems</h2>
+
+        <article class="postmortem">
+            <div class="pm-head"><span>Facebook · "Worst outage in over four years"</span><span class="dur">Sep 23, 2010 · ~2.5 hours</span></div>
+            <div class="pm-body">
+                <p>An automated system checked cached configuration values and, when it found an invalid one, replaced it from the database. Then someone changed the <em>database</em> copy to a value the system considered invalid. Every client saw the bad value and tried to "fix" it by querying the database cluster, hundreds of thousands of queries a second. Errors from the overloaded database were themselves read as invalid values, so clients <strong>deleted the cache key and retried</strong>, a feedback loop that kept the database down even after the original fix.</p>
+                <p>To break the loop, Facebook had to <strong>turn the site off</strong>, let the databases recover, then let users back in gradually.</p>
+                <p class="lesson"><strong>Lesson:</strong> recovery logic that fires on every client at once is a stampede waiting to happen. Treat database errors as "back off", never as "invalidate and retry."</p>
+                <p class="source">Source: <a href="https://engineering.fb.com/2010/09/23/uncategorized/more-details-on-today-s-outage/">Facebook Engineering: More details on today's outage</a></p>
+            </div>
+        </article>
+
+        <article class="postmortem">
+            <div class="pm-head"><span>Facebook · Scaling Memcache (research paper)</span><span class="dur">NSDI 2013</span></div>
+            <div class="pm-body">
+                <p>Facebook's paper on running memcache at the scale of billions of requests per second introduced <strong>leases</strong> to solve two problems you met tonight: stale sets (Decision 3) and thundering herds (Decision 1). It also explains why they delete on write instead of updating.</p>
+                <p class="lesson"><strong>Lesson:</strong> the patterns in this module aren't theoretical. They were battle-tested at extreme scale and written up so you don't have to rediscover them at 23:45.</p>
+                <p class="source">Source: <a href="https://www.usenix.org/conference/nsdi13/technical-sessions/presentation/nishtala">USENIX NSDI '13: Scaling Memcache at Facebook</a></p>
+            </div>
+        </article>
+
+        <p class="section-tag">Field notes</p>
+        <h2>Morgan's rules of thumb</h2>
+        <ol class="rules">
+            <li>Past about 90% hit rate, the cache is load-bearing. Test what happens when it's empty.</li>
+            <li>Delete on write, don't set. Let readers fill the cache.</li>
+            <li>Every TTL gets jitter. No exceptions.</li>
+            <li>Never use write-back for anything involving money.</li>
+            <li>There are only two hard things in computer science, and cache invalidation is the one that pages you.</li>
+        </ol>
+
+        <p class="section-tag">Your turn</p>
+        <h2>Design challenge</h2>
+        <div class="card">
+            <p><strong>Design the cache for Brightcart's "items in stock" badge.</strong> It appears on every product page, gets 80k reads per second, and during flash sales the stock count changes 500 times per second for a single hot product. Showing "In stock" when it's sold out causes angry customers. Showing "Sold out" when it isn't loses sales.</p>
+            <p>Which caching pattern? What TTL? How fresh is fresh enough, and does the answer change when stock is low?</p>
+        </div>
+        <details>
+            <summary>Hints</summary>
+            <ul>
+                <li>Does the badge need the exact count, or just "plenty / few left / sold out"?</li>
+                <li>Tolerable staleness can be dynamic: 60 seconds when stock is 4,000, 1 second when it's 4.</li>
+                <li>The authoritative check happens at checkout anyway, so the badge can be a hint.</li>
+            </ul>
+        </details>
+        <details>
+            <summary>What a strong answer covers</summary>
+            <ul>
+                <li>Caching a coarse <em>bucket</em> rather than the exact count, so far fewer updates change the cached value.</li>
+                <li>A short or dynamic TTL, plus explicit invalidation when the item crosses a bucket boundary.</li>
+                <li>Request coalescing for the hot product, and a local in-process cache of about 1 second to absorb the 80k reads per second.</li>
+                <li>Correctness enforced at checkout (atomic decrement), not at display.</li>
+            </ul>
+        </details>
+
+        <p class="section-tag">Live drill</p>
+        <h2>Run it again with a real Game Master</h2>
+        <div class="drill">
+            <pre id="drill">Act as Morgan, a Staff SRE running a live incident simulation. I'm on-call at an e-commerce site; our Redis cache just restarted empty and Postgres is overloaded. Narrate in real time with metrics (hit rate, DB CPU, p99 latency, error rate). Let me take actions and play out realistic consequences, including second-order effects like connection storms and stale data. Then throw a follow-up problem at me involving cache invalidation races. Cover: cache-aside vs read-through vs write-through vs write-back, eviction, TTL jitter, stampedes, single-flight, leases. Finish with a blameless postmortem and grade my calls.</pre>
+            <button class="copy" type="button" data-copy="drill">Copy</button>
+        </div>
+
+        <div class="scoreboard">
+            <h3>Incident resolved</h3>
+            <p data-score></p>
+            <button type="button" data-reset>Replay this incident</button>
+        </div>
+    </div>
+
+    <nav class="modnav">
+        <a href="02-load-balancing.html"><small>← Previous</small>Half the Fleet Is Lying</a>
+        <a class="next" href="04-databases.html"><small>Next incident →</small>The Backup That Wasn't</a>
+    </nav>
+
+</div>
 </body>
 </html>

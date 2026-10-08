@@ -3,35 +3,236 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Module 2: Load Balancing</title>
+    <title>02 · Half the Fleet Is Lying — Load Balancing</title>
+    <meta name="description" content="Incident 02: one bad server is eating far more than its share of traffic. Learn L4 vs L7, balancing algorithms, health checks, outlier detection and sticky sessions under pressure.">
     <link rel="stylesheet" href="../styles.css">
+    <script>document.documentElement.classList.add('js')</script>
+    <script defer src="../assets/engine.js"></script>
 </head>
-<body>
-    <header>
-        <h1>Module 2: Load Balancing</h1>
-        <a href="../index.html">Back to Home</a>
+<body data-module="02">
+<div class="wrap">
+
+    <nav class="topbar"><a href="../index.html">← Year One at Brightcart</a><span>Incident 02 / 10</span></nav>
+
+    <header class="mod-header">
+        <p class="kicker">Week 5 · Load Balancing</p>
+        <h1>Half the Fleet Is Lying</h1>
+        <ul class="meta">
+            <li>Role: primary on-call</li>
+            <li>3 decisions</li>
+            <li>~15 min</li>
+        </ul>
     </header>
 
-    <div class="section">
-        <h2>What is a Load Balancer?</h2>
-        <p>A load balancer is a device that acts as a reverse proxy and distributes network or application traffic across a number of servers. Load balancers are used to increase capacity (concurrent users) and reliability of applications.</p>
-
-        <h3>Layer 4 (L4) vs. Layer 7 (L7) Load Balancing</h3>
-        <p>Load balancers can operate at different layers of the OSI model.</p>
-        <ul>
-            <li><strong>L4 Load Balancer:</strong> Operates at the transport layer (e.g., TCP, UDP). It makes routing decisions based on the source and destination IP addresses and ports, without inspecting the content of the traffic. It's very fast and simple.</li>
-            <li><strong>L7 Load Balancer:</strong> Operates at the application layer (e.g., HTTP). It can inspect the content of the traffic, such as HTTP headers or cookies. This allows for more intelligent routing decisions, such as routing a user to the same server they were on previously (sticky sessions) or routing based on the URL path.</li>
-        </ul>
-
-        <h3>Load Balancing Algorithms</h3>
-        <p>There are several algorithms for distributing traffic:</p>
-        <ul>
-            <li><strong>Round Robin:</strong> Each server gets a turn in a cyclical order. It's simple but doesn't account for server load.</li>
-            <li><strong>Least Connections:</strong> The load balancer sends traffic to the server with the fewest active connections. This is a more intelligent approach that accounts for server load.</li>
-            <li><strong>IP Hash:</strong> The load balancer calculates a hash of the client's IP address and uses it to determine which server to send the request to. This ensures that a user is consistently sent to the same server.</li>
-            <li><strong>Weighted Round Robin:</strong> Some servers are given a higher weight than others, and they receive a proportionally larger share of the traffic. This is useful if you have servers with different capacities.</li>
-        </ul>
+    <div class="pager">
+<div class="line"><span class="ts">Tue 14:10</span>  <span class="sev">SEV2</span> checkout-api 5xx rate <span class="err">18.2%</span> (threshold 1%)</div>
+<div class="line"><span class="ts">Tue 14:10</span>  fleet: 12/12 targets <span class="okc">healthy</span> (lb health check: GET /health → 200)</div>
+<div class="line"><span class="ts">Tue 14:11</span>  deploy log: <span class="warn">checkout-api v412 rolled to 1/12 hosts (canary: ip-10-0-3-17)</span></div>
     </div>
 
+    <p>Your first solo on-call shift. The checkout API runs on 12 servers behind a Layer 7 load balancer configured for <strong>least connections</strong>. A canary deploy went out 20 minutes ago to one host. The load balancer says all 12 hosts are healthy.</p>
+    <p>Something doesn't add up. If one host in twelve is bad, you'd expect about 8% errors, not 18%.</p>
+
+    <aside class="mentor">
+        <div class="avatar">M</div>
+        <div>
+            <p class="who">Morgan · Staff SRE · 14 years on-call</p>
+            <p>When the numbers don't add up, that's your best clue. Don't touch anything yet. First explain the 18%.</p>
+        </div>
+    </aside>
+
+    <div class="decision" data-id="d1">
+        <span class="label">Decision 1 · 14:12</span>
+        <h3>Why is one bad host causing 18% errors instead of 8%?</h3>
+        <div class="choice" data-verdict="bad">
+            <button type="button">The load balancer itself is malfunctioning. Fail over to the standby load balancer.</button>
+            <div class="outcome" hidden>
+                <p>The failover drops every in-flight connection: about 2,300 checkouts reset at once. Error rate on the new load balancer? Still 18%. You've added a second incident on top of the first. Don't touch shared infrastructure until you can explain the symptom.</p>
+            </div>
+        </div>
+        <div class="choice" data-verdict="good">
+            <button type="button">The canary fails fast. It returns 500s in 3ms, so it always has the fewest open connections, and least-connections keeps sending it more traffic.</button>
+            <div class="outcome" hidden>
+                <p>That's it. This is the <strong>black hole</strong> effect: a broken server that errors instantly looks like the least-busy server in the fleet. Least-connections and least-response-time algorithms reward fast failure. Its access log confirms it: the canary is serving 2.4x its fair share.</p>
+                <p>You pull the canary out of rotation. Errors drop to 0.1%.</p>
+            </div>
+        </div>
+        <div class="choice" data-verdict="ok">
+            <button type="button">Clients are retrying failed requests, which doubles the error count.</button>
+            <div class="outcome" hidden>
+                <p>Partly true: retries do amplify errors. But you spend 25 minutes looking at client retry configs while users keep failing. The bigger cause was the algorithm itself routing <em>toward</em> the broken host. Start from what's different about the bad host, then follow the traffic.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="gated" data-after="d1">
+        <p>Whatever path you took, the canary is out and v412 is rolled back. The postmortem asks: <em>why did the load balancer report a host serving 100% errors as healthy?</em> Because <code>/health</code> only checks that the process is running. The canary's process was fine. Its database connection pool was misconfigured.</p>
+
+        <div class="decision" data-id="d2">
+            <span class="label">Decision 2 · Postmortem action item</span>
+            <h3>How do you redesign the health check?</h3>
+            <div class="choice" data-verdict="bad">
+                <button type="button">Make /health deep: check the database, Redis, the payment provider and the inventory service. If anything fails, return 503.</button>
+                <div class="outcome" hidden>
+                    <p>Three weeks later the payment provider has a 40-second blip. All 12 hosts fail their health checks <em>at the same time</em>, and the load balancer pulls the entire fleet. Browsing and search, which don't touch payments, go down too.</p>
+                    <p>A deep health check turns a shared dependency's hiccup into a total outage. Health checks should answer "is <em>this host</em> broken?", not "is the world OK?"</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="good">
+                <button type="button">Check local readiness only (process, connection pool, disk). Also add outlier detection: eject hosts whose error rate is far above the fleet's, but never more than 30% of hosts at once.</button>
+                <div class="outcome" hidden>
+                    <p>Readiness catches a host that can't serve. Outlier detection catches the canary pattern: a host whose 5xx rate is 50x its peers'. The <strong>max ejection cap</strong> is the key detail. If <em>everyone</em> is failing, the problem is shared, and ejecting hosts can only make it worse. That's how Envoy and service meshes do it.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="bad">
+                <button type="button">Keep /health as is, but check every 60 seconds instead of every 5 to reduce load.</button>
+                <div class="outcome" hidden>
+                    <p>Now a dead host keeps getting traffic for up to 60 seconds × the failure threshold of 3, which is three minutes of black-holing. Health checks are cheap. Slow detection is not.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="gated" data-after="d2">
+        <p>Two weeks later, product has a request: "Carts keep vanishing when users bounce between servers. Can we just pin users to one server?" A teammate opens a PR to turn on <strong>IP-hash</strong> sticky routing.</p>
+
+        <div class="decision" data-id="d3">
+            <span class="label">Decision 3 · Code review</span>
+            <h3>How do you review this PR?</h3>
+            <div class="choice" data-verdict="bad">
+                <button type="button">Approve. IP hash is simple and keeps each user on the same server.</button>
+                <div class="outcome" hidden>
+                    <p>Brightcart's biggest B2B customer has 4,000 employees behind one corporate NAT IP. Every one of them hashes to the <em>same server</em>, which runs at 100% while the others idle. Meanwhile mobile users switch between Wi-Fi and cellular, their IP changes, and they land on a new server with an empty cart anyway.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="ok">
+                <button type="button">Request changes: use cookie-based stickiness instead of IP hash.</button>
+                <div class="outcome" hidden>
+                    <p>Better. The cookie follows the user across IP changes. But when a host dies or autoscaling removes one, everyone pinned to it loses their cart. Stickiness also skews load, because long-lived heavy users pile up on old hosts. It treats the symptom.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="good">
+                <button type="button">Request changes: the real bug is carts stored in server memory. Move carts to a shared store (Redis or the DB) and keep the servers stateless.</button>
+                <div class="outcome" hidden>
+                    <p>You fixed the cause. With the state external, any server can serve any request, the balancing algorithm can do its job, and scale-in or a crash loses nothing. Stickiness is still occasionally useful as a <em>performance</em> optimization (warm local caches), but never as a correctness requirement.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="gated" data-after="d3">
+
+        <p class="section-tag">Debrief</p>
+        <h2>What you just learned</h2>
+
+        <div class="card">
+            <h3>Layer 4 vs. Layer 7</h3>
+            <div class="table-wrap"><table>
+                <tr><th></th><th>L4 (transport)</th><th>L7 (application)</th></tr>
+                <tr><td>Sees</td><td>IPs, ports, TCP/UDP</td><td>HTTP: paths, headers, cookies</td></tr>
+                <tr><td>Can do</td><td>Very fast forwarding, any protocol</td><td>Path routing (<code>/api</code> vs <code>/img</code>), TLS termination, retries, cookie stickiness, per-request balancing</td></tr>
+                <tr><td>Examples</td><td>AWS NLB, IPVS, Maglev</td><td>AWS ALB, NGINX, Envoy, HAProxy (HTTP mode)</td></tr>
+                <tr><td>Use when</td><td>Raw throughput, non-HTTP, long-lived connections</td><td>Most web traffic, microservice routing</td></tr>
+            </table></div>
+        </div>
+
+        <div class="card">
+            <h3>Balancing algorithms and how each one fails</h3>
+            <div class="table-wrap"><table>
+                <tr><th>Algorithm</th><th>How it works</th><th>Failure mode</th></tr>
+                <tr><td>Round robin</td><td>Each server in turn</td><td>Ignores load. A slow server still gets its full share</td></tr>
+                <tr><td>Weighted round robin</td><td>Turns weighted by capacity</td><td>Weights go stale as hardware changes</td></tr>
+                <tr><td>Least connections</td><td>Fewest open connections wins</td><td><strong>Black hole:</strong> a fast-failing host attracts traffic</td></tr>
+                <tr><td>IP hash</td><td>hash(client IP) → server</td><td>NAT hotspots, and mobile IPs change</td></tr>
+                <tr><td>Power of two choices</td><td>Pick 2 at random, send to the less loaded</td><td>Few. Near-optimal and cheap (used by Envoy and NGINX)</td></tr>
+                <tr><td>Consistent hashing</td><td>Hash ring. Adding or removing a node moves only ~1/N of keys</td><td>Needs virtual nodes to balance. Used for caches and shards</td></tr>
+            </table></div>
+        </div>
+
+        <div class="card">
+            <h3>Health checks: liveness, readiness and outlier detection</h3>
+            <ul>
+                <li><strong>Liveness:</strong> is the process alive? Failing means restart it.</li>
+                <li><strong>Readiness:</strong> can <em>this host</em> serve right now (warmed up, pool connected, disk not full)? Failing means stop sending it traffic.</li>
+                <li><strong>Outlier detection (passive):</strong> watch real traffic and eject hosts that error far more than their peers. Always cap the ejection percentage.</li>
+                <li><strong>Fail open:</strong> if <em>every</em> target is unhealthy, many load balancers route to all of them anyway. When everything looks broken, the health check is probably what's wrong.</li>
+            </ul>
+        </div>
+
+        <p class="section-tag">It happened for real</p>
+        <h2>Real postmortems</h2>
+
+        <article class="postmortem">
+            <div class="pm-head"><span>Meta (Facebook, Instagram, WhatsApp)</span><span class="dur">Oct 4, 2021 · ~6 hours</span></div>
+            <div class="pm-body">
+                <p>A command meant to assess backbone capacity accidentally disconnected Facebook's entire backbone. Then a <strong>health-check-style safety mechanism</strong> finished the job: Facebook's DNS servers are designed to withdraw their BGP route advertisements when they can't reach the data centers. They did exactly that, and every Facebook domain vanished from the internet even though the DNS servers themselves were running.</p>
+                <p class="lesson"><strong>Lesson:</strong> "remove myself when I look unhealthy" is safe for <em>one</em> node. When every node runs the same logic against a shared dependency, they all remove themselves together. Same trap as Decision 2.</p>
+                <p class="source">Source: <a href="https://engineering.fb.com/2021/10/05/networking-traffic/outage-details/">Meta Engineering: More details about the October 4 outage</a></p>
+            </div>
+        </article>
+
+        <article class="postmortem">
+            <div class="pm-head"><span>AWS Elastic Load Balancing · us-east-1</span><span class="dur">Dec 24, 2012</span></div>
+            <div class="pm-body">
+                <p>On Christmas Eve, a maintenance process was accidentally run against production and <strong>deleted part of the ELB state data</strong>: the configuration that tells each load balancer which backends to route to. Affected load balancers were misconfigured for hours. Netflix streaming was among the high-profile casualties.</p>
+                <p class="lesson"><strong>Lesson:</strong> the load balancer is also a system with state, a control plane and failure modes. Its config is production data and needs access controls and backups.</p>
+                <p class="source">Source: <a href="https://aws.amazon.com/message/680587/">AWS: Summary of the December 24, 2012 ELB Service Event</a></p>
+            </div>
+        </article>
+
+        <p class="section-tag">Field notes</p>
+        <h2>Morgan's rules of thumb</h2>
+        <ol class="rules">
+            <li>When the error rate is out of proportion to the number of bad hosts, suspect the algorithm.</li>
+            <li>Health checks answer "is <em>this host</em> broken?" Never fail one because of a shared dependency.</li>
+            <li>Cap automated ejection. If everything looks broken, the detector is the thing that's broken.</li>
+            <li>Stickiness is a performance optimization, never a correctness requirement.</li>
+            <li>Don't touch shared infrastructure until you can explain the symptom.</li>
+        </ol>
+
+        <p class="section-tag">Your turn</p>
+        <h2>Design challenge</h2>
+        <div class="card">
+            <p><strong>Brightcart adds live video shopping</strong>: WebSocket connections that stay open 45 minutes on average, 200k concurrent at peak. You need to deploy a new version of the WebSocket servers twice a day without dropping viewers.</p>
+            <p>L4 or L7? Which algorithm? How do you drain a server during deploys? What happens when you add 10 new servers mid-show?</p>
+        </div>
+        <details>
+            <summary>Hints</summary>
+            <ul>
+                <li>With long-lived connections, "least connections" means something very different than with 50ms requests.</li>
+                <li>New servers start with zero connections. Do they get flooded, or ignored?</li>
+                <li>Draining: stop new connections, then ask clients to reconnect gradually, with jitter.</li>
+            </ul>
+        </details>
+        <details>
+            <summary>What a strong answer covers</summary>
+            <ul>
+                <li>Connection draining with a deadline plus a server-sent "reconnect" message with random delay, to avoid a thundering-herd reconnect.</li>
+                <li>Balancing on connections rather than requests. New servers fill up only gradually, since existing connections don't move.</li>
+                <li>A client-side reconnect strategy with exponential backoff and jitter, and resumable session state stored outside the socket server.</li>
+                <li>L4 for raw connection throughput, or L7 if you need path or auth routing at the edge.</li>
+            </ul>
+        </details>
+
+        <p class="section-tag">Live drill</p>
+        <h2>Run it again with a real Game Master</h2>
+        <div class="drill">
+            <pre id="drill">Act as Morgan, a Staff SRE running a live incident simulation. I'm on-call; our checkout API is behind an L7 load balancer and the error rate doesn't match the number of bad hosts. Narrate with realistic alerts, LB metrics and logs. Let me investigate by asking for specific data (per-host request counts, latency, health check results). Don't reveal the cause; make me reason to it. Cover: balancing algorithms and their failure modes, health checks vs outlier detection, fail-open behavior, and sticky sessions. End with a blameless postmortem and grade my decisions.</pre>
+            <button class="copy" type="button" data-copy="drill">Copy</button>
+        </div>
+
+        <div class="scoreboard">
+            <h3>Incident resolved</h3>
+            <p data-score></p>
+            <button type="button" data-reset>Replay this incident</button>
+        </div>
+    </div>
+
+    <nav class="modnav">
+        <a href="01-scalability.html"><small>← Previous</small>The Midnight Drop</a>
+        <a class="next" href="03-caching.html"><small>Next incident →</small>The Night the Cache Went Cold</a>
+    </nav>
+
+</div>
 </body>
 </html>

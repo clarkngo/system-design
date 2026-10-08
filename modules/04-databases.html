@@ -3,44 +3,250 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Module 4: Databases</title>
+    <title>04 · The Backup That Wasn't — Databases</title>
+    <meta name="description" content="Incident 04: choose between SQL and NoSQL, survive replica lag, then face a late-night database wipe. Learn ACID, replication, read-your-writes, sharding, indexing and backups that actually restore.">
     <link rel="stylesheet" href="../styles.css">
+    <script>document.documentElement.classList.add('js')</script>
+    <script defer src="../assets/engine.js"></script>
 </head>
-<body>
-    <header>
-        <h1>Module 4: Databases</h1>
-        <a href="../index.html">Back to Home</a>
+<body data-module="04">
+<div class="wrap">
+
+    <nav class="topbar"><a href="../index.html">← Year One at Brightcart</a><span>Incident 04 / 10</span></nav>
+
+    <header class="mod-header">
+        <p class="kicker">Month 4 · Databases (SQL vs. NoSQL)</p>
+        <h1>The Backup That Wasn't</h1>
+        <ul class="meta">
+            <li>Role: backend engineer, data team rotation</li>
+            <li>3 decisions</li>
+            <li>~15 min</li>
+        </ul>
     </header>
 
-    <div class="section">
-        <h2>SQL (Relational) vs. NoSQL (Non-Relational)</h2>
-        <p>Choosing the right database is a critical decision in system design.</p>
-
-        <h3>SQL Databases</h3>
-        <p>Examples: MySQL, PostgreSQL, Oracle</p>
-        <ul>
-            <li><strong>Structure:</strong> Data is stored in tables with a predefined schema.</li>
-            <li><strong>Transactions:</strong> Provide ACID (Atomicity, Consistency, Isolation, Durability) guarantees.</li>
-            <li><strong>Use Cases:</strong> Applications that require strong consistency and complex transactions, such as e-commerce and financial systems.</li>
-        </ul>
-
-        <h3>NoSQL Databases</h3>
-        <p>Examples: MongoDB (Document), Cassandra (Wide-column), Redis (Key-value)</p>
-        <ul>
-            <li><strong>Structure:</strong> Flexible schema. Can be document-oriented, key-value, wide-column, or graph-based.</li>
-            <li><strong>Scalability:</strong> Generally scale out horizontally more easily than SQL databases.</li>
-            <li><strong>Use Cases:</strong> Big data, real-time applications, and applications with unstructured or semi-structured data.</li>
-        </ul>
+    <div class="pager">
+<div class="line"><span class="ts">Mon 10:02</span>  #arch-review</div>
+<div class="line"><span class="ts">Mon 10:02</span>  <b>@devin (Eng Manager)</b>: Two new features this quarter: (1) <b>reserve-and-pay inventory</b> for flash sales, (2) <b>clickstream</b> tracking: every view, scroll, hover. ~50k events/sec. Someone said "we should just move to NoSQL, it scales." Thoughts?</div>
+<div class="line"><span class="ts">Mon 10:03</span>  <b>@morgan</b>: @you, take a first pass.</div>
     </div>
 
-    <div class="section">
-        <h2>Database Scaling Techniques</h2>
-        <ul>
-            <li><strong>Replication:</strong> Creating copies of the database. A common setup is a primary-replica relationship, where writes go to the primary and reads are distributed among the replicas. This improves read performance and provides redundancy.</li>
-            <li><strong>Sharding (Data Partitioning):</strong> Splitting a large database into smaller, more manageable pieces called shards. Each shard has the same schema but holds a different subset of the data. This allows for horizontal scaling of both reads and writes.</li>
-            <li><strong>Indexing:</strong> Creating data structures (indexes) that improve the speed of data retrieval operations on a database table. Indexes are used to quickly locate data without having to search every row in a database table every time a table is accessed.</li>
-        </ul>
+    <p>Brightcart runs a single Postgres primary with one async replica. Orders, users, products and inventory all live there. It handles about 3,000 writes per second at peak, comfortably.</p>
+
+    <aside class="mentor">
+        <div class="avatar">M</div>
+        <div>
+            <p class="who">Morgan · Staff SRE · 14 years on-call</p>
+            <p>"SQL vs NoSQL" is the wrong question. The right one is: <em>what are the access patterns, and what are the invariants?</em> An invariant is something that must never be false, like "we never sell more units than we have." Find those first.</p>
+        </div>
+    </aside>
+
+    <div class="decision" data-id="d1">
+        <span class="label">Decision 1 · Architecture review</span>
+        <h3>Where should inventory and clickstream data live?</h3>
+        <div class="choice" data-verdict="bad">
+            <button type="button">Migrate everything to a document database. It scales horizontally and the schema is flexible.</button>
+            <div class="outcome" hidden>
+                <p>Six months of migration later, the first flash sale <strong>oversells by 212 units</strong>. "Decrement stock and create the order" used to be one ACID transaction. Now it spans two documents, and two concurrent buyers both read <code>stock = 1</code>. You traded away the invariant to solve a scale problem you didn't actually have: 3k writes/s is easy for Postgres.</p>
+            </div>
+        </div>
+        <div class="choice" data-verdict="ok">
+            <button type="button">Keep everything in Postgres, including the clickstream, and add more hardware.</button>
+            <div class="outcome" hidden>
+                <p>Inventory stays safe. But 50k clickstream inserts per second fill up the write-ahead log, bloat the indexes and add replication lag. Checkout latency doubles during peak browsing. Low-value, high-volume writes are now starving your most important transactions. It works for a few months.</p>
+            </div>
+        </div>
+        <div class="choice" data-verdict="good">
+            <button type="button">Keep orders and inventory in Postgres for ACID transactions. Send the clickstream to an append-only store built for heavy write volume, such as Cassandra or Kafka feeding a warehouse.</button>
+            <div class="outcome" hidden>
+                <p><strong>Polyglot persistence</strong>: pick the store by access pattern. Inventory needs transactions and constraints (<code>CHECK (stock &gt;= 0)</code> and <code>SELECT … FOR UPDATE</code>). Clickstream is append-only, time-ordered, rarely updated and tolerant of eventual consistency, which is exactly what wide-column stores and logs are built for. Each system does what it's good at.</p>
+            </div>
+        </div>
     </div>
 
+    <div class="gated" data-after="d1">
+        <p>Month 4, week 2. Dashboards and "My orders" pages are hammering the primary, so the team routes all reads to the replica. Within a day, support tickets arrive:</p>
+        <div class="pager">
+<div class="line"><span class="ts">Wed 12:14</span>  ticket #88213: "I placed an order and it's not in My Orders. So I ordered again. Now I have <span class="err">two</span>."</div>
+<div class="line"><span class="ts">Wed 12:15</span>  pg-replica-1 replication lag: <span class="warn">2.8s</span> (peak 11s)</div>
+        </div>
+
+        <div class="decision" data-id="d2">
+            <span class="label">Decision 2 · Replica lag</span>
+            <h3>How do you fix "my order disappeared"?</h3>
+            <div class="choice" data-verdict="ok">
+                <button type="button">Make replication synchronous, so the primary waits for the replica before confirming any write.</button>
+                <div class="outcome" hidden>
+                    <p>The bug is gone, but every write now pays a network round-trip to the replica. Worse, when the replica goes down for maintenance, <em>the primary can't commit writes</em> (unless you configure a fallback). You fixed a read problem by making writes slower and more fragile.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="good">
+                <button type="button">Guarantee read-your-writes: after a user writes, send their reads to the primary for a short window (or until the replica catches up to their write). Everyone else reads from replicas.</button>
+                <div class="outcome" hidden>
+                    <p>Only the user who just wrote needs to see that write immediately. Everyone else can tolerate a few seconds of lag. You keep about 98% of reads on replicas and fix the bug. A more precise version: store the write's log position (LSN) in the session and only read from a replica that has caught up to it.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="bad">
+                <button type="button">Show "orders may take a minute to appear" on the page.</button>
+                <div class="outcome" hidden>
+                    <p>Users don't read banners. Duplicate orders continue at about 40 a day, each one a refund, a support ticket and a customer who trusts you a little less. A consistency problem doesn't go away because you documented it.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="gated" data-after="d2">
+        <p>Month 4, Friday, 23:20. The replica has fallen hopelessly behind after a bulk import, so it has to be re-seeded from scratch. You're pairing with Sam over Zoom. Sam has two terminals open: <code>db-primary</code> and <code>db-replica</code>. Both prompts look identical: <code>postgres@db:~$</code>.</p>
+        <p>Sam: "I'll wipe the replica's data directory and re-seed. We have nightly backups to S3 anyway, so we're safe. Ready?"</p>
+
+        <div class="decision" data-id="d3">
+            <span class="label">Decision 3 · 23:24, finger hovering over Enter</span>
+            <h3>What do you say?</h3>
+            <div class="choice" data-verdict="bad">
+                <button type="button">"Go for it. We have backups."</button>
+                <div class="outcome" hidden>
+                    <p>Sam runs <code>rm -rf /var/lib/postgresql/data</code> in the wrong terminal. Ctrl+C after two seconds. <strong>The primary is gone.</strong></p>
+                    <p>You open S3. The newest backup is 19 days old. The backup cron job had been failing since a Postgres version upgrade, and the failure emails went to a distribution list that silently rejected them. You restore from a disk snapshot that happens to be 6 hours old. Brightcart loses 6 hours of orders.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="ok">
+                <button type="button">"Wait. Take a manual snapshot of the primary first, then go."</button>
+                <div class="outcome" hidden>
+                    <p>Good instinct. That snapshot saves you when the wrong terminal gets wiped. But you only got lucky: nobody had tested whether the nightly backups actually restore, and they don't. Next time there won't be a fresh snapshot.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="good">
+                <button type="button">"Stop. Run <code>hostname</code> in both terminals first. And before anything destructive, show me a backup we've actually restored recently."</button>
+                <div class="outcome" hidden>
+                    <p>Sam runs <code>hostname</code>. The terminal they were about to use says <code>db-primary</code>. Silence on the call.</p>
+                    <p>Then you check the backups: 19 days old, failing silently. You postpone the re-seed, fix the backup job, run a test restore to a scratch instance, set the shell prompt on production hosts to <span style="color:var(--bad)">red with the hostname</span>, and add a "last successful restore" alert. Nobody outside the team ever hears about tonight. That's what good looks like.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="gated" data-after="d3">
+
+        <p class="section-tag">Debrief</p>
+        <h2>What you just learned</h2>
+
+        <div class="card">
+            <h3>SQL vs. NoSQL: choose by access pattern</h3>
+            <div class="table-wrap"><table>
+                <tr><th></th><th>Relational (SQL)</th><th>Document</th><th>Wide-column</th><th>Key-value</th></tr>
+                <tr><td>Examples</td><td>Postgres, MySQL</td><td>MongoDB, DynamoDB*</td><td>Cassandra, ScyllaDB, Bigtable</td><td>Redis, DynamoDB*</td></tr>
+                <tr><td>Strength</td><td>Transactions, joins, constraints, ad-hoc queries</td><td>Flexible nested records, read a whole entity at once</td><td>Massive write throughput, time-series, scale-out</td><td>Simple lookups at extreme speed</td></tr>
+                <tr><td>Weakness</td><td>Harder to scale writes past one primary</td><td>Cross-document invariants</td><td>You must design tables around your queries</td><td>No queries beyond get/put</td></tr>
+                <tr><td>Brightcart fit</td><td>Orders, inventory, payments</td><td>Product catalog</td><td>Clickstream, activity feeds</td><td>Sessions, carts, cache</td></tr>
+            </table></div>
+            <p style="font-size:.85rem;color:var(--muted)">* DynamoDB is a key-value and document hybrid.</p>
+        </div>
+
+        <div class="card">
+            <h3>ACID in one line each</h3>
+            <ul>
+                <li><strong>Atomicity:</strong> all of the transaction happens, or none of it. (No order without the stock decrement.)</li>
+                <li><strong>Consistency:</strong> constraints always hold. (<code>stock &gt;= 0</code>)</li>
+                <li><strong>Isolation:</strong> concurrent transactions don't see each other's half-done work. (Two buyers can't both take the last unit.)</li>
+                <li><strong>Durability:</strong> once committed, it survives a crash.</li>
+            </ul>
+        </div>
+
+        <div class="card">
+            <h3>Scaling a database, in the order you should reach for it</h3>
+            <ol>
+                <li><strong>Indexes:</strong> turn full-table scans into lookups. Each one costs write speed and storage, so index what you query.</li>
+                <li><strong>Caching:</strong> see Incident 03.</li>
+                <li><strong>Read replicas:</strong> scale reads. Async replicas lag, so plan for <em>read-your-writes</em>. Sync replicas make writes slower and couple availability.</li>
+                <li><strong>Vertical scaling:</strong> a bigger primary. Boring and very effective.</li>
+                <li><strong>Functional split:</strong> move different domains to separate databases.</li>
+                <li><strong>Sharding:</strong> split rows across primaries by a shard key (see Incident 01). It scales writes, but makes cross-shard queries and transactions much harder. Reach for it last.</li>
+            </ol>
+        </div>
+
+        <div class="card">
+            <h3>Backups: RPO, RTO and Schrödinger's backup</h3>
+            <ul>
+                <li><strong>RPO</strong> (recovery point objective): how much data can you afford to lose? Continuous WAL archiving gets you minutes. Nightly dumps get you up to 24 hours.</li>
+                <li><strong>RTO</strong> (recovery time objective): how long can you be down while you restore?</li>
+                <li><strong>A backup you haven't restored is a hope, not a backup.</strong> Automate test restores and alert on "last successful restore".</li>
+                <li>Replication is <em>not</em> a backup. It faithfully copies your <code>DROP TABLE</code> to every replica.</li>
+            </ul>
+        </div>
+
+        <p class="section-tag">It happened for real</p>
+        <h2>Real postmortems</h2>
+
+        <article class="postmortem">
+            <div class="pm-head"><span>GitLab.com · Database outage</span><span class="dur">Jan 31, 2017 · ~6 hours of data lost</span></div>
+            <div class="pm-body">
+                <p>While fighting replication lag late at night, an engineer ran a command to wipe the secondary's data directory and re-seed it, in a terminal connected to the <strong>primary</strong>. They stopped it within a second or two, but about 300 GB of production data was already gone. When the team turned to backups, they found that "the process of both finding and using backups failed completely." They restored from an LVM snapshot taken about 6 hours earlier, the best option they had, and livestreamed the recovery.</p>
+                <p class="lesson"><strong>Lesson:</strong> nearly every safeguard can quietly stop working. Test restores, make production prompts unmistakable, and check the hostname before running anything destructive. Decision 3 was modeled on this night.</p>
+                <p class="source">Source: <a href="https://about.gitlab.com/blog/2017/02/10/postmortem-of-database-outage-of-january-31/">GitLab: Postmortem of database outage of January 31</a></p>
+            </div>
+        </article>
+
+        <article class="postmortem">
+            <div class="pm-head"><span>Discord · MongoDB → Cassandra → ScyllaDB</span><span class="dur">2015 – 2023</span></div>
+            <div class="pm-body">
+                <p>Discord launched on a single MongoDB replica set, deliberately planning to migrate later. As message volume exploded, they moved to Cassandra in 2017 (12 nodes, billions of messages). By 2022 it was 177 nodes holding trillions of messages, with frequent pages and <strong>hot partitions</strong> (busy channels) causing latency across the cluster. They migrated to ScyllaDB on 72 nodes, and historical-message p99 dropped from 40–125ms to about 15ms.</p>
+                <p class="lesson"><strong>Lesson:</strong> start with what lets you ship, and design for the migration you know is coming. Choose the next database for the access pattern you <em>actually</em> have (append-heavy, time-ordered messages), and expect hot keys.</p>
+                <p class="source">Sources: <a href="https://discord.com/blog/how-discord-stores-billions-of-messages">How Discord Stores Billions of Messages</a> · <a href="https://discord.com/blog/how-discord-stores-trillions-of-messages">How Discord Stores Trillions of Messages</a></p>
+            </div>
+        </article>
+
+        <p class="section-tag">Field notes</p>
+        <h2>Morgan's rules of thumb</h2>
+        <ol class="rules">
+            <li>Find your invariants first. If you need transactions, you need a database that has them.</li>
+            <li>Postgres goes further than you think. Measure before you migrate.</li>
+            <li>Async replicas lag. Design read-your-writes from day one.</li>
+            <li>Replication is not a backup. An untested backup is not a backup.</li>
+            <li>Before anything destructive: <code>hostname</code>, a second pair of eyes, and a restore you've actually tested.</li>
+        </ol>
+
+        <p class="section-tag">Your turn</p>
+        <h2>Design challenge</h2>
+        <div class="card">
+            <p><strong>Design the data layer for Brightcart Reviews</strong>: product reviews with star ratings, photos, "helpful" votes, and a per-product average rating shown on every product page (80k reads/s). Some viral products get 20k "helpful" votes per minute.</p>
+            <p>Which stores? How do you compute and serve the average rating? What happens to the row for a viral review?</p>
+        </div>
+        <details>
+            <summary>Hints</summary>
+            <ul>
+                <li>Incrementing one counter row 20k times a minute is a lock-contention problem.</li>
+                <li>Does the average need to be exact and instantly up to date?</li>
+                <li>Photos don't belong in the database (see Incident 09).</li>
+            </ul>
+        </details>
+        <details>
+            <summary>What a strong answer covers</summary>
+            <ul>
+                <li>Reviews in a relational or document store. Photos in object storage, with only keys in the database.</li>
+                <li>Votes appended as events and aggregated asynchronously (or sharded counters), instead of <code>UPDATE … SET votes = votes + 1</code> on one hot row.</li>
+                <li>A denormalized, cached average rating per product, recomputed periodically or incrementally.</li>
+                <li>Read-your-writes for the reviewer's own review, and eventual consistency for everyone else.</li>
+            </ul>
+        </details>
+
+        <p class="section-tag">Live drill</p>
+        <h2>Run it again with a real Game Master</h2>
+        <div class="drill">
+            <pre id="drill">Act as Morgan, a Staff SRE and database veteran, running a live simulation. Give me an e-commerce company's database situation (Postgres primary + async replica) and walk me through a series of escalating problems: a SQL-vs-NoSQL architecture debate, replica-lag bugs, a slow query that needs an index, and finally a late-night operational emergency involving backups. Make me decide at each step, play out realistic consequences, and don't reveal the answer. End with a blameless postmortem and grade me.</pre>
+            <button class="copy" type="button" data-copy="drill">Copy</button>
+        </div>
+
+        <div class="scoreboard">
+            <h3>Incident resolved</h3>
+            <p data-score></p>
+            <button type="button" data-reset>Replay this incident</button>
+        </div>
+    </div>
+
+    <nav class="modnav">
+        <a href="03-caching.html"><small>← Previous</small>The Night the Cache Went Cold</a>
+        <a class="next" href="05-message-queues.html"><small>Next incident →</small>Everyone Got Charged Twice</a>
+    </nav>
+
+</div>
 </body>
 </html>

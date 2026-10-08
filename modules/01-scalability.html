@@ -3,48 +3,259 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Module 1: Scalability & Elasticity</title>
+    <title>01 · The Midnight Drop — Scalability & Elasticity</title>
+    <meta name="description" content="Incident 01: a flash sale is coming and marketing promises 20x traffic. Learn vertical vs horizontal scaling, the AKF cube, autoscaling, admission control and hot partitions by living through it.">
     <link rel="stylesheet" href="../styles.css">
+    <script>document.documentElement.classList.add('js')</script>
+    <script defer src="../assets/engine.js"></script>
 </head>
-<body>
-    <header>
-        <h1>Module 1: Scalability & Elasticity</h1>
-        <a href="../index.html">Back to Home</a>
+<body data-module="01">
+<div class="wrap">
+
+    <nav class="topbar"><a href="../index.html">← Year One at Brightcart</a><span>Incident 01 / 10</span></nav>
+
+    <header class="mod-header">
+        <p class="kicker">Week 2 · Scalability & Elasticity</p>
+        <h1>The Midnight Drop</h1>
+        <ul class="meta">
+            <li>Role: new backend engineer</li>
+            <li>3 decisions</li>
+            <li>~15 min</li>
+        </ul>
     </header>
 
-    <div class="section">
-        <h2>Understanding Scalability</h2>
-        <p>Scalability is the property of a system to handle a growing amount of work by adding resources to the system. It's a critical concept in system design, ensuring that an application or service can perform under increasing demand.</p>
-
-        <h3>Vertical Scaling (Scaling Up)</h3>
-        <p>Vertical scaling involves increasing the capacity of a single server. This means adding more powerful hardware, such as a faster CPU, more RAM, or a larger hard drive.</p>
-        <ul>
-            <li><strong>Pros:</strong> Simplicity. You don't have to manage a distributed system.</li>
-            <li><strong>Cons:</strong> There's a hardware limit to how much you can scale up. It can be very expensive, and it introduces a single point of failure.</li>
-        </ul>
-
-        <h3>Horizontal Scaling (Scaling Out)</h3>
-        <p>Horizontal scaling involves adding more servers to your pool of resources. This is the foundation of modern, large-scale web applications.</p>
-        <ul>
-            <li><strong>Pros:</strong> Almost limitless scalability. It's more cost-effective and resilient to failures.</li>
-            <li><strong>Cons:</strong> Increased complexity. You need to manage a distributed system, which introduces challenges like load balancing, data consistency, and inter-service communication.</li>
-        </ul>
-
-        <h3>The AKF Scale Cube</h3>
-        <p>The book "The Art of Scalability" introduces a 3-dimensional model for scaling called the AKF Scale Cube:</p>
-        <ul>
-            <li><strong>X-axis (Horizontal Duplication):</strong> This is the horizontal scaling described above, where you run multiple copies of your application behind a load balancer.</li>
-            <li><strong>Y-axis (Functional Decomposition):</strong> This involves splitting the application into different services (microservices). For example, you might have separate services for authentication, search, and payments.</li>
-            <li><strong>Z-axis (Data Partitioning / Sharding):</strong> This involves splitting the data across multiple servers. For example, you could shard a user database by the first letter of the user's last name.</li>
-        </ul>
+    <div class="pager">
+<div class="line"><span class="ts">Thu 14:05</span>  #launch-midnight-drop</div>
+<div class="line"><span class="ts">Thu 14:05</span>  <b>@priya (Marketing)</b>: Influencer collab confirmed 🎉 Limited sneaker drop goes live TOMORROW 00:00. Expecting <span class="warn">~20x normal traffic</span>. Site will be fine right?</div>
+<div class="line"><span class="ts">Thu 14:06</span>  <b>@morgan (Staff SRE)</b>: @you — you're on point for this one. Let's talk.</div>
     </div>
 
-    <div class="section">
-        <h2>Elasticity</h2>
-        <p>Elasticity is the ability of a system to automatically scale resources up and down based on demand. This is a key feature of cloud computing.</p>
-        <p>For example, a video streaming service might experience a surge in traffic during the evening. An elastic system would automatically provision more servers to handle the load and then de-provision them when the traffic subsides, optimizing for both performance and cost.</p>
-        <p>Elasticity is typically achieved through **auto-scaling**, a cloud service that monitors metrics like CPU utilization or network traffic and adjusts the number of active servers accordingly.</p>
+    <p>It's your second week at <strong>Brightcart</strong>, a fast-growing online marketplace. Today the whole thing runs on one beefy VM: the web app, the session store (in process memory) and a Postgres database on its own box. On a normal evening it serves about 400 requests per second at 35% CPU.</p>
+    <p>Twenty times that is 8,000 req/s. You have ten hours.</p>
+
+    <aside class="mentor">
+        <div class="avatar">M</div>
+        <div>
+            <p class="who">Morgan · Staff SRE · 14 years on-call</p>
+            <p>I've watched three launches like this go sideways. Every time, the team asked "how do we handle more traffic?" when the real question was "<em>what breaks first</em>, and what happens to users when it does?" Keep that in your head. Your call.</p>
+        </div>
+    </aside>
+
+    <div class="decision" data-id="d1">
+        <span class="label">Decision 1 · T-minus 10 hours</span>
+        <h3>How do you prepare for 20x?</h3>
+        <div class="choice" data-verdict="bad">
+            <button type="button">Resize the VM to the largest instance type the cloud offers: 4x the CPU and 8x the RAM.</button>
+            <div class="outcome" hidden>
+                <p>The resize needs a reboot, so you take a 6-minute outage at 16:00. Fine. At 00:00:04 the traffic arrives and you're at 100% CPU within seconds. A machine 4x bigger buys about 4x the capacity, and you needed 20x. Worse, one box means one failure domain: when it falls over, <em>everything</em> falls over.</p>
+                <p>That's vertical scaling. It's simple and often the right first move, but it has a hard ceiling and makes the box a single point of failure.</p>
+            </div>
+        </div>
+        <div class="choice" data-verdict="ok">
+            <button type="button">Clone the app onto 12 identical servers behind a load balancer.</button>
+            <div class="outcome" hidden>
+                <p>Capacity looks great on paper. But sessions live in each server's memory, so when the load balancer sends a user's next request to a different server, they're suddenly logged out with an empty cart. Support gets 900 tickets that say "my cart disappeared at checkout."</p>
+                <p>Horizontal scaling only works when the tier is <strong>stateless</strong>. You scaled out without moving the state out first.</p>
+            </div>
+        </div>
+        <div class="choice" data-verdict="good">
+            <button type="button">Move sessions to Redis so the app is stateless, then run 12 copies behind a load balancer.</button>
+            <div class="outcome" hidden>
+                <p>Exactly the order a veteran would take: first make the tier stateless, <em>then</em> duplicate it. Any server can now handle any request, so adding servers adds capacity, and losing one costs you 1/12th of capacity instead of the whole site.</p>
+                <p>Morgan nods: "Good. Now the app tier isn't the thing that breaks first. So what is?"</p>
+            </div>
+        </div>
     </div>
 
+    <div class="gated" data-after="d1">
+        <p>Whatever happened earlier, by 23:30 you have 12 stateless app servers behind a load balancer with sessions in Redis. Autoscaling is on: add instances when average CPU passes 70%. A new instance takes about 4 minutes to boot and warm up.</p>
+
+        <div class="pager">
+<div class="line"><span class="ts">00:00:03</span>  requests/s   <span class="err">16,800</span>  (normal: 400)</div>
+<div class="line"><span class="ts">00:00:41</span>  app-cpu-avg  <span class="err">97%</span>   autoscaler: launching +12 instances (ETA 4m)</div>
+<div class="line"><span class="ts">00:01:10</span>  postgres     <span class="err">connections 498/500</span>   p99 query 9.4s</div>
+<div class="line"><span class="ts">00:01:12</span>  <span class="sev">SEV1</span> checkout error rate 31%</div>
+        </div>
+
+        <p>It's <strong>42x</strong>, not 20x. The influencer posted early and bots joined in. Checkout is failing for a third of users, and the database is drowning.</p>
+
+        <div class="decision" data-id="d2">
+            <span class="label">Decision 2 · 00:01:15</span>
+            <h3>What do you do right now?</h3>
+            <div class="choice" data-verdict="bad">
+                <button type="button">Raise the Postgres connection limit from 500 to 3,000 so the new app servers can connect too.</button>
+                <div class="outcome" hidden>
+                    <p>Postgres runs one OS process per connection. At 3,000 connections it spends its time context-switching and fighting over locks instead of running queries. Throughput <em>drops</em>. Then the 12 new app servers come online and open even more connections. The database stops responding entirely at 00:04.</p>
+                    <p>More concurrency against a saturated resource makes it slower, not faster. Scaling the stateless tier just moved the bottleneck down a layer.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="ok">
+                <button type="button">Wait. The autoscaler is already adding 12 more instances.</button>
+                <div class="outcome" hidden>
+                    <p>Autoscaling is <em>reactive</em>. It saw the spike 40 seconds in and needs 4 more minutes. Meanwhile overloaded servers start failing their health checks, the load balancer pulls them out, and the survivors get even more traffic. By the time the reinforcements arrive, the bottleneck is the database, which autoscaling doesn't touch. You survive, but 6 minutes of a third of checkouts failing makes the news.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="good">
+                <button type="button">Turn on the virtual waiting room: admit about 3,000 shoppers a minute and give everyone else a queue position.</button>
+                <div class="outcome" hidden>
+                    <p>That's <strong>admission control</strong>: you can't create capacity in 60 seconds, but you can decide who gets the capacity you have. Error rate drops to 0.4% within a minute. Users see "You're #18,204 in line, about 6 min" instead of a spinning checkout, and the bots time out of the queue.</p>
+                    <p>Morgan: "A slow 'yes' is worth more than a fast 'error'. Shed load deliberately, or the system will shed it for you, at random."</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="gated" data-after="d2">
+        <p>The drop sells out by 00:22. Next morning's postmortem notes that the <code>orders</code> table grew 9x overnight and the database is the obvious next bottleneck. The team agrees to <strong>shard</strong> orders across 8 Postgres instances. A teammate asks you to pick the shard key.</p>
+
+        <div class="decision" data-id="d3">
+            <span class="label">Decision 3 · The morning after</span>
+            <h3>How do you split the orders across 8 shards?</h3>
+            <div class="choice" data-verdict="bad">
+                <button type="button">By the first letter of the customer's last name: A–C on shard 1, D–F on shard 2, and so on.</button>
+                <div class="outcome" hidden>
+                    <p>Surnames aren't evenly distributed. In the US, the "S" shard holds about 10% of customers on its own, while "Q", "X" and "Z" barely register. You've built a <strong>hotspot</strong>: one shard melts while the others idle. Rebalancing means migrating live data across shards.</p>
+                    <p>Plenty of textbooks use this exact example. It's a classic anti-pattern.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="bad">
+                <button type="button">By product ID, so all orders for one product live together and per-product reports are fast.</button>
+                <div class="outcome" hidden>
+                    <p>Next month's drop is a single product, so <em>100% of the writes go to one shard</em>. This is the <strong>hot partition</strong> problem (aka the celebrity problem). A shard key has to spread the writes during your <em>peak</em> traffic pattern, not your average one.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="good">
+                <button type="button">By a hash of the customer ID. Per-product reports come from an async copy in the analytics warehouse.</button>
+                <div class="outcome" hidden>
+                    <p>A hash spreads customers evenly, and one customer's orders stay on one shard, so "my orders" is a single-shard query. The queries you gave up (cross-customer, per-product) move to a system built for them. That's the trade-off senior engineers make on purpose: pick the key for the hot path, and serve everything else asynchronously.</p>
+                    <p>Bonus: hash into many <em>virtual</em> partitions (say 1,024) mapped onto 8 servers, so adding a 9th server means moving partitions instead of rehashing everything.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="gated" data-after="d3">
+
+        <p class="section-tag">Debrief</p>
+        <h2>What you just learned</h2>
+        <p>Every concept below showed up in your night. That's the point: you'll remember the session that logged everyone out longer than a definition.</p>
+
+        <div class="card">
+            <h3>Vertical vs. horizontal scaling</h3>
+            <div class="table-wrap"><table>
+                <tr><th></th><th>Vertical (scale up)</th><th>Horizontal (scale out)</th></tr>
+                <tr><td>What</td><td>Bigger machine: more CPU and RAM</td><td>More machines behind a load balancer</td></tr>
+                <tr><td>Ceiling</td><td>Hard limit: the biggest box on the market</td><td>Practically unbounded</td></tr>
+                <tr><td>Failure</td><td>Single point of failure</td><td>Lose one node, lose 1/N of capacity</td></tr>
+                <tr><td>Cost of entry</td><td>Near zero. No code changes</td><td>The tier must be <strong>stateless</strong> first</td></tr>
+                <tr><td>When</td><td>Early on, and for databases (until you can't)</td><td>Web and app tiers, always. Data tiers once you outgrow one box</td></tr>
+            </table></div>
+        </div>
+
+        <div class="card">
+            <h3>The AKF Scale Cube: three ways to scale</h3>
+            <ul>
+                <li><strong>X-axis, duplication:</strong> run N copies of the same thing. <em>You did this with 12 stateless app servers.</em></li>
+                <li><strong>Y-axis, functional split:</strong> break the system up by function (checkout, search, catalog) so each part scales on its own. That's how microservices are born.</li>
+                <li><strong>Z-axis, data partitioning (sharding):</strong> split the <em>data</em> so each node owns a slice. <em>You did this with the orders table, and saw how much the key matters.</em></li>
+            </ul>
+            <p>From <em>The Art of Scalability</em> by Abbott &amp; Fisher.</p>
+        </div>
+
+        <div class="card">
+            <h3>Elasticity, and why autoscaling isn't magic</h3>
+            <p>Elasticity is adding and removing capacity automatically as demand changes. It saves money on quiet nights, but it's <strong>reactive</strong>: there's a lag to detect the spike plus a lag to boot and warm up instances. For spikes you can see coming:</p>
+            <ul>
+                <li><strong>Scheduled scaling:</strong> pre-warm to the expected peak 30 minutes <em>before</em> a known event.</li>
+                <li><strong>Warm pools:</strong> keep pre-booted instances ready so scaling takes seconds instead of minutes.</li>
+                <li><strong>Admission control / load shedding:</strong> a waiting room, rate limits, or dropping low-priority work. Your last line of defense.</li>
+                <li><strong>Know your bottleneck chain:</strong> app, then connection pool, then database. Scaling one layer moves the bottleneck down to the next.</li>
+            </ul>
+        </div>
+
+        <p class="section-tag">It happened for real</p>
+        <h2>Real postmortems</h2>
+
+        <article class="postmortem">
+            <div class="pm-head"><span>Niantic + Google Cloud · Pokémon GO launch</span><span class="dur">July 2016</span></div>
+            <div class="pm-body">
+                <p>The team planned for 1x player traffic, with a worst case of about 5x. Real traffic hit <strong>50x</strong> the original target. They survived by scaling horizontally on Google's container infrastructure in real time, including a mid-launch load balancer migration.</p>
+                <p class="lesson"><strong>Lesson:</strong> your "worst case" estimate is a guess. Design so that capacity can be <em>added</em>, rather than trying to predict it exactly.</p>
+                <p class="source">Source: <a href="https://cloud.google.com/blog/products/gcp/bringing-pokemon-go-to-life-on-google-cloud">Google Cloud: Bringing Pokémon GO to life</a></p>
+            </div>
+        </article>
+
+        <article class="postmortem">
+            <div class="pm-head"><span>Ticketmaster · Taylor Swift Eras Tour presale</span><span class="dur">Nov 2022</span></div>
+            <div class="pm-body">
+                <p>Ticketmaster reported 3.5 billion total system requests, <strong>4x its previous peak</strong>, driven by bots and by fans without presale codes. It estimated that about 15% of site interactions hit errors, and some fans lost tickets already in their carts. The general public sale was cancelled.</p>
+                <p class="lesson"><strong>Lesson:</strong> a waiting room only works if admission is strict and bots are filtered <em>before</em> they consume capacity. Demand from bots is still demand on your servers.</p>
+                <p class="source">Source: <a href="https://www.rollingstone.com/music/music-news/ticketmaster-cancels-general-on-sale-taylor-swift-the-eras-tour-1234632678/">Rolling Stone coverage of Ticketmaster's statement</a></p>
+            </div>
+        </article>
+
+        <article class="postmortem">
+            <div class="pm-head"><span>Slack · First workday of the year</span><span class="dur">Jan 4, 2021</span></div>
+            <div class="pm-body">
+                <p>Traffic returning after the holidays overloaded an AWS Transit Gateway. Packet loss made web servers wait on the network, so CPU <em>dropped</em> and the autoscaler <strong>scaled the web tier down</strong> in the middle of the incident. Then it swung to a massive scale-up, and the internal provisioning service hit its own limits (including the Linux open-files limit). Many new instances never finished provisioning.</p>
+                <p class="lesson"><strong>Lesson:</strong> autoscaling is a control loop fed by metrics, so when the metrics lie, it makes things worse. And the system that <em>adds</em> capacity needs capacity of its own.</p>
+                <p class="source">Source: <a href="https://slack.engineering/slacks-outage-on-january-4th-2021/">Slack Engineering: Slack's Outage on January 4th 2021</a></p>
+            </div>
+        </article>
+
+        <p class="section-tag">Field notes</p>
+        <h2>Morgan's rules of thumb</h2>
+        <ol class="rules">
+            <li>Make it stateless before you make it many.</li>
+            <li>Every layer you scale pushes the bottleneck to the next one. Know the whole chain: LB → app → pool → DB → disk.</li>
+            <li>Choose shard keys for your <em>peak</em> traffic pattern. Ask "what happens when one key goes viral?"</li>
+            <li>Autoscaling handles gradual change. Known spikes need pre-warming, and unknown spikes need load shedding.</li>
+            <li>A waiting room is a feature, not a failure. A queue position beats a 500 error.</li>
+        </ol>
+
+        <p class="section-tag">Your turn</p>
+        <h2>Design challenge</h2>
+        <div class="card">
+            <p><strong>Brightcart is launching in Japan.</strong> A partnership puts the app on the home screen of a TV shopping channel. Every time a product appears on air (about 40 times a night), traffic spikes 30x for exactly 90 seconds, then drops back to normal.</p>
+            <p>Design the scaling strategy. What does autoscaling do with a 90-second spike? What do you pre-warm? Where do you shed load?</p>
+        </div>
+        <details>
+            <summary>Hints</summary>
+            <ul>
+                <li>A 4-minute boot time is longer than the whole 90-second spike. Reactive scaling is useless here.</li>
+                <li>The broadcast schedule is known in advance. Use it.</li>
+                <li>What's cacheable? Product pages for the on-air item are identical for everyone.</li>
+            </ul>
+        </details>
+        <details>
+            <summary>What a strong answer covers</summary>
+            <ul>
+                <li>Scheduled scaling driven by the broadcast schedule (pre-warm before each segment, or hold peak capacity through the show block).</li>
+                <li>Pushing the on-air product page to a CDN or edge cache, so most of the spike never reaches origin.</li>
+                <li>Inventory reservation as the real bottleneck: a queue or token system for "add to cart" on the featured item.</li>
+                <li>Admission control as the safety net, plus a cost comparison of holding capacity for the 3-hour show versus autoscaling.</li>
+            </ul>
+        </details>
+
+        <p class="section-tag">Live drill</p>
+        <h2>Run it again with a real Game Master</h2>
+        <p>Paste this into Claude for an unscripted version where you can try <em>anything</em>:</p>
+        <div class="drill">
+            <pre id="drill">Act as Morgan, a Staff SRE with 14 years of on-call experience, running a live incident simulation for me. I'm the on-call engineer at an e-commerce company during a flash sale with 40x normal traffic. Narrate the incident in real time with pager alerts and metrics. Don't give me answers: ask what I'd do, then play out realistic consequences (including second-order effects) of my choices. Focus on: vertical vs horizontal scaling, statelessness, autoscaling lag, connection pools, load shedding, and shard keys. After the incident resolves, run a blameless postmortem and grade my decisions.</pre>
+            <button class="copy" type="button" data-copy="drill">Copy</button>
+        </div>
+
+        <div class="scoreboard">
+            <h3>Incident resolved</h3>
+            <p data-score></p>
+            <button type="button" data-reset>Replay this incident</button>
+        </div>
+    </div>
+
+    <nav class="modnav">
+        <a class="next" href="02-load-balancing.html"><small>Next incident →</small>Half the Fleet Is Lying</a>
+    </nav>
+
+</div>
 </body>
 </html>
