@@ -3,40 +3,243 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Module 5: Message Queues</title>
+    <title>05 · Everyone Got Charged Twice — Message Queues</title>
+    <meta name="description" content="Incident 05: a queue redelivers payment jobs and customers get double-charged. Learn delivery guarantees, visibility timeouts, idempotency, dead-letter queues, the outbox pattern and queues vs logs.">
     <link rel="stylesheet" href="../styles.css">
+    <script>document.documentElement.classList.add('js')</script>
+    <script defer src="../assets/engine.js"></script>
 </head>
-<body>
-    <header>
-        <h1>Module 5: Message Queues & Event-Driven Architecture</h1>
-        <a href="../index.html">Back to Home</a>
+<body data-module="05">
+<div class="wrap">
+
+    <nav class="topbar"><a href="../index.html">← Year One at Brightcart</a><span>Incident 05 / 10</span></nav>
+
+    <header class="mod-header">
+        <p class="kicker">Month 5 · Message Queues & Event-Driven Architecture</p>
+        <h1>Everyone Got Charged Twice</h1>
+        <ul class="meta">
+            <li>Role: primary on-call, payments</li>
+            <li>3 decisions</li>
+            <li>~15 min</li>
+        </ul>
     </header>
 
-    <div class="section">
-        <h2>What is a Message Queue?</h2>
-        <p>A message queue is a form of asynchronous service-to-service communication used in serverless and microservices architectures. Messages are stored on the queue until they are processed and deleted. Each message is processed only once, by a single consumer.</p>
-        <p>Examples: RabbitMQ, Amazon SQS, Azure Service Bus</p>
-
-        <h3>Benefits of Message Queues</h3>
-        <ul>
-            <li><strong>Decoupling:</strong> Producers and consumers are not aware of each other. They only need to know about the queue.</li>
-            <li><strong>Asynchronous Processing:</strong> Producers can add messages to the queue without having to wait for them to be processed. This is useful for long-running tasks.</li>
-            <li><strong>Load Leveling:</strong> Message queues can help to smooth out peaks in load. If a service is receiving a high volume of requests, it can add them to a queue and process them at its own pace.</li>
-        </ul>
+    <div class="pager">
+<div class="line"><span class="ts">Sat 11:32</span>  <span class="sev">SEV1</span> #support-escalations: <span class="err">47 tickets in 20 min</span>: "I was charged twice"</div>
+<div class="line"><span class="ts">Sat 11:32</span>  payments-worker p50 duration: <span class="warn">24.1s</span> (was 1.8s)   payment-provider latency: degraded</div>
+<div class="line"><span class="ts">Sat 11:33</span>  sqs orders-to-charge   visible: 3,412   in-flight: 640   <span class="warn">ApproximateReceiveCount &gt; 1: 38%</span></div>
     </div>
 
-    <div class="section">
-        <h2>Event-Driven Architecture</h2>
-        <p>In an event-driven architecture, services communicate through events. An event is a change in state. When a service's state changes, it publishes an event. Other services can subscribe to these events and react accordingly.</p>
-        <p>This is often implemented using a **message broker** or **event bus**, such as Apache Kafka or Amazon Kinesis. Unlike a message queue where each message is processed by a single consumer, an event bus allows multiple consumers to receive and process the same event.</p>
+    <p>When a customer clicks "Place order", the checkout API writes the order and publishes an <code>OrderPlaced</code> message to a queue. A fleet of payment workers pulls messages, charges the card through the payment provider, and deletes the message. Separate consumers send the receipt email and update analytics.</p>
+    <p>The queue's <strong>visibility timeout</strong> is 20 seconds: once a worker receives a message, it's hidden from other workers for 20 seconds. If it isn't deleted by then, the queue assumes the worker died and hands the message to someone else.</p>
+    <p>The payment provider is slow today. Charges are taking 24 seconds.</p>
 
-        <h3>Delivery Guarantees</h3>
-        <ul>
-            <li><strong>At-most-once:</strong> A message will be delivered once or not at all. There is a risk of data loss.</li>
-            <li><strong>At-least-once:</strong> A message will be delivered one or more times. This can lead to duplicate processing, so consumers must be idempotent.</li>
-            <li><strong>Exactly-once:</strong> A message will be delivered exactly once. This is the most desirable but also the most difficult to achieve.</li>
-        </ul>
+    <aside class="mentor">
+        <div class="avatar">M</div>
+        <div>
+            <p class="who">Morgan · Staff SRE · 14 years on-call</p>
+            <p>Do the math out loud. 24 seconds of work, 20 seconds of invisibility. What happens at second 21? And remember: every minute we spend thinking, more people get double-charged. Stop the bleeding first.</p>
+        </div>
+    </aside>
+
+    <div class="decision" data-id="d1">
+        <span class="label">Decision 1 · 11:34</span>
+        <h3>Stop the double charges. Now.</h3>
+        <div class="choice" data-verdict="bad">
+            <button type="button">Purge the queue so nothing gets processed twice.</button>
+            <div class="outcome" hidden>
+                <p>The duplicates stop, and so do 3,412 legitimate orders. Those customers see "Order placed" but are never charged, the warehouse never ships, and reconstructing them from database records takes the team all weekend. Never destroy a queue's contents to fix a consumer problem.</p>
+            </div>
+        </div>
+        <div class="choice" data-verdict="bad">
+            <button type="button">Triple the number of payment workers to drain the backlog faster.</button>
+            <div class="outcome" hidden>
+                <p>More workers means more messages in flight past their timeout, so <em>more</em> duplicate charges, and you're hammering an already-degraded payment provider, which slows it down further. Adding consumers doesn't help when the bottleneck is downstream.</p>
+            </div>
+        </div>
+        <div class="choice" data-verdict="good">
+            <button type="button">Scale payment workers to zero. Let orders pile up safely in the queue while you fix the consumer.</button>
+            <div class="outcome" hidden>
+                <p>This is the superpower of a queue: <strong>decoupling</strong>. Checkout keeps accepting orders, the queue durably buffers them, and nobody gets charged at all until you're ready. Customers see "Order placed" and the charge happens 30 minutes later. Nobody notices. The bleeding stops at 11:35.</p>
+            </div>
+        </div>
     </div>
 
+    <div class="gated" data-after="d1">
+        <p>Bleeding stopped. Now the real fix. The obvious bug is the 20-second timeout versus 24-second work. But Morgan asks a harder question: "Suppose the worker charges the card successfully, then crashes before it deletes the message. What happens?"</p>
+
+        <div class="decision" data-id="d2">
+            <span class="label">Decision 2 · 11:50</span>
+            <h3>What's the real fix?</h3>
+            <div class="choice" data-verdict="ok">
+                <button type="button">Raise the visibility timeout to 5 minutes, well above the worst-case processing time.</button>
+                <div class="outcome" hidden>
+                    <p>Necessary, but not enough. A worker can still crash, be OOM-killed or be redeployed <em>after</em> charging and <em>before</em> deleting the message, and the queue will redeliver it. With standard queues, duplicates are part of the contract. You've made them rarer, not impossible.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="good">
+                <button type="button">Make the consumer idempotent: send the payment provider an idempotency key derived from the order ID, record processed orders, and also raise the timeout.</button>
+                <div class="outcome" hidden>
+                    <p>Now redelivery is harmless. If the same <code>order_id</code> arrives twice, the provider recognizes the idempotency key and returns the original charge instead of creating a new one. "Exactly-once" in practice means <strong>at-least-once delivery + idempotent processing</strong>. Raising the timeout as well cuts down on wasted work.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="ok">
+                <button type="button">Switch to a broker that offers "exactly-once delivery".</button>
+                <div class="outcome" hidden>
+                    <p>Read the fine print. Exactly-once features (Kafka transactions, SQS FIFO deduplication windows) cover the broker's own bookkeeping: deduplicating sends within a window, or atomically consuming and producing within Kafka. None of them can make an <em>external</em> side effect like charging a card happen exactly once. Your consumer still needs to be idempotent.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="gated" data-after="d2">
+        <p>Workers are back on and the backlog drains. Then, at 12:40:</p>
+        <div class="pager">
+<div class="line"><span class="ts">12:40</span>  payments-worker: <span class="err">TypeError: Cannot read properties of null (reading 'currency')</span>   msg 7f3a…</div>
+<div class="line"><span class="ts">12:40</span>  payments-worker: <span class="err">TypeError: Cannot read properties of null (reading 'currency')</span>   msg 7f3a…</div>
+<div class="line"><span class="ts">12:41</span>  payments-worker: <span class="err">TypeError: …</span>   msg 7f3a…   (receive count: 41)</div>
+        </div>
+        <p>A malformed order from a buggy partner integration crashes every worker that picks it up. Then it becomes visible again, gets picked up, and crashes another worker. It's a <strong>poison message</strong>.</p>
+
+        <div class="decision" data-id="d3">
+            <span class="label">Decision 3 · 12:42</span>
+            <h3>How should the system handle messages that can never succeed?</h3>
+            <div class="choice" data-verdict="bad">
+                <button type="button">Wrap the handler in try/catch and delete the message on any error.</button>
+                <div class="outcome" hidden>
+                    <p>The worker stops crashing. Two weeks later, a payment-provider outage makes every charge throw for 10 minutes, and your handler <strong>deletes 2,800 legitimate orders</strong>. Silent data loss is the worst failure mode there is: nothing pages you until customers ask where their stuff is.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="good">
+                <button type="button">After N failed attempts (say 5, with backoff), move the message to a dead-letter queue, page someone, and keep processing everything else.</button>
+                <div class="outcome" hidden>
+                    <p>The poison message gets parked instead of looping or vanishing. A human (or a replay tool) inspects the dead-letter queue, fixes the data, and redrives it. Retries with backoff handle <em>transient</em> errors, and the dead-letter queue catches <em>permanent</em> ones. Always alert on DLQ depth above zero.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="bad">
+                <button type="button">Keep retrying forever with exponential backoff. It'll succeed eventually.</button>
+                <div class="outcome" hidden>
+                    <p>It never will: the data is malformed. Meanwhile it consumes worker time forever, and if this were a FIFO queue or a Kafka partition it would <strong>block everything behind it</strong>. Ordered streams stall completely on one bad message.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="gated" data-after="d3">
+
+        <p class="section-tag">Debrief</p>
+        <h2>What you just learned</h2>
+
+        <div class="card">
+            <h3>Why queues exist</h3>
+            <ul>
+                <li><strong>Decoupling:</strong> checkout doesn't know or care that payments is down. <em>(Decision 1.)</em></li>
+                <li><strong>Load leveling:</strong> a 10x burst becomes a backlog that drains at a steady rate, not a 10x load on downstream services.</li>
+                <li><strong>Asynchronous work:</strong> return "Order placed" in 80ms and charge the card in the background.</li>
+                <li><strong>Fan-out:</strong> one event, many independent consumers (payments, email, analytics).</li>
+            </ul>
+        </div>
+
+        <div class="card">
+            <h3>Delivery guarantees, honestly</h3>
+            <div class="table-wrap"><table>
+                <tr><th>Guarantee</th><th>How</th><th>Risk</th><th>Use for</th></tr>
+                <tr><td>At-most-once</td><td>Ack before processing</td><td>Lost messages</td><td>Metrics, logs you can afford to drop</td></tr>
+                <tr><td>At-least-once</td><td>Ack after processing</td><td>Duplicates</td><td>The default for almost everything</td></tr>
+                <tr><td>"Exactly-once"</td><td>At-least-once + <strong>idempotent consumer</strong></td><td>You have to build it</td><td>Money, inventory, anything with side effects</td></tr>
+            </table></div>
+        </div>
+
+        <div class="card">
+            <h3>Queue vs. log</h3>
+            <div class="table-wrap"><table>
+                <tr><th></th><th>Queue (SQS, RabbitMQ)</th><th>Log (Kafka, Kinesis, Pulsar)</th></tr>
+                <tr><td>Model</td><td>Message consumed once, then deleted</td><td>Append-only. Consumers track their own offset</td></tr>
+                <tr><td>Fan-out</td><td>Through pub/sub topics fanned into queues</td><td>Native: any number of consumer groups</td></tr>
+                <tr><td>Replay</td><td>No (once it's deleted, it's gone)</td><td>Yes. Rewind the offset and reprocess</td></tr>
+                <tr><td>Ordering</td><td>Best-effort, or FIFO per group</td><td>Strict per partition</td></tr>
+                <tr><td>Best for</td><td>Task and job distribution</td><td>Event streams, event sourcing, data pipelines</td></tr>
+            </table></div>
+        </div>
+
+        <div class="card">
+            <h3>The dual-write trap and the outbox pattern</h3>
+            <p>Checkout does two things: <code>INSERT order</code> into the database and <code>publish OrderPlaced</code> to the queue. If the process crashes between them, you get an order that's never charged, or a charge for an order that doesn't exist. The fix is the <strong>transactional outbox</strong>: write the order <em>and</em> an outbox row in the same database transaction, and have a separate relay publish outbox rows to the queue (at-least-once, which your idempotent consumer is ready for).</p>
+        </div>
+
+        <p class="section-tag">It happened for real</p>
+        <h2>Real-world stories</h2>
+
+        <article class="postmortem">
+            <div class="pm-head"><span>Slack · Job queue outage</span><span class="dur">~2016 · write-up published Dec 2017</span></div>
+            <div class="pm-body">
+                <p>Slack's job queue was Redis-backed. When database contention slowed job execution, jobs piled up until Redis hit its memory limit. With no free memory, Slack <strong>could no longer enqueue new jobs</strong>, so every operation that depended on the queue failed. Worse, dequeuing also needed a little free memory, so the queue stayed locked up even after the database recovered, and needed extensive manual intervention. Slack put Kafka in front of Redis as a durable, disk-backed buffer.</p>
+                <p class="lesson"><strong>Lesson:</strong> a queue's job is to absorb backlog. If the backlog can exhaust the queue itself, your shock absorber becomes the point of failure. Know your queue's capacity limits and alert on depth.</p>
+                <p class="source">Source: <a href="https://slack.engineering/scaling-slacks-job-queue/">Slack Engineering: Scaling Slack's Job Queue</a></p>
+            </div>
+        </article>
+
+        <article class="postmortem">
+            <div class="pm-head"><span>Stripe · Idempotency keys</span><span class="dur">Engineering practice · 2017</span></div>
+            <div class="pm-body">
+                <p>Stripe's API lets clients send an <code>Idempotency-Key</code> header with any write. The server stores the key with the result, so a retried request (after a timeout, a crash or a dropped connection) returns the original result instead of charging twice. Stripe's engineering blog explains why this is the only safe way to retry payments over an unreliable network.</p>
+                <p class="lesson"><strong>Lesson:</strong> on a network, you can't tell "failed" from "succeeded but the reply was lost." Idempotency makes that question irrelevant. You'll design these yourself in Incident 07.</p>
+                <p class="source">Source: <a href="https://stripe.com/blog/idempotency">Stripe: Designing robust and predictable APIs with idempotency</a></p>
+            </div>
+        </article>
+
+        <p class="section-tag">Field notes</p>
+        <h2>Morgan's rules of thumb</h2>
+        <ol class="rules">
+            <li>Assume every message arrives at least twice. Design every consumer to be idempotent.</li>
+            <li>Visibility timeout must exceed worst-case processing time, with margin.</li>
+            <li>Every queue gets a dead-letter queue. Every DLQ gets an alert.</li>
+            <li>Never purge a queue to fix a consumer. Pause the consumer instead.</li>
+            <li>Writing to the database and a queue is a dual write. Use an outbox.</li>
+        </ol>
+
+        <p class="section-tag">Your turn</p>
+        <h2>Design challenge</h2>
+        <div class="card">
+            <p><strong>Brightcart's order pipeline</strong>: once an order is placed, it must be charged, then inventory reserved, then a shipping label created, then the customer emailed. Any step can fail. If the charge succeeds but inventory is gone, the customer must be refunded.</p>
+            <p>Design it with queues or events. How do you handle a failure in step 3? How do you make sure the email isn't sent twice? How do you see where a given order is?</p>
+        </div>
+        <details>
+            <summary>Hints</summary>
+            <ul>
+                <li>Look up the <strong>saga pattern</strong>: a sequence of local transactions, each with a <em>compensating</em> action.</li>
+                <li>Choreography (services react to each other's events) vs. orchestration (one coordinator drives the steps).</li>
+            </ul>
+        </details>
+        <details>
+            <summary>What a strong answer covers</summary>
+            <ul>
+                <li>A saga with compensations (refund after a failed reserve), orchestrated by a state machine or workflow engine like Temporal or Step Functions.</li>
+                <li>Idempotency keys at each step, and an outbox for each service's events.</li>
+                <li>DLQs plus alerting, and an order-state table for visibility.</li>
+                <li>Emails deduplicated by a <code>(order_id, email_type)</code> key.</li>
+            </ul>
+        </details>
+
+        <p class="section-tag">Live drill</p>
+        <h2>Run it again with a real Game Master</h2>
+        <div class="drill">
+            <pre id="drill">Act as Morgan, a Staff SRE running a live incident simulation. I'm on-call for payments at an e-commerce company that uses a message queue between checkout and payment workers. Customers are reporting double charges. Narrate with queue metrics (depth, in-flight, receive counts), worker logs and support tickets. Make me diagnose and act; play out consequences realistically. Escalate with a poison message and a dual-write bug. Cover: delivery guarantees, visibility timeouts, idempotency, DLQs, outbox pattern, queue vs log. End with a blameless postmortem and grade me.</pre>
+            <button class="copy" type="button" data-copy="drill">Copy</button>
+        </div>
+
+        <div class="scoreboard">
+            <h3>Incident resolved</h3>
+            <p data-score></p>
+            <button type="button" data-reset>Replay this incident</button>
+        </div>
+    </div>
+
+    <nav class="modnav">
+        <a href="04-databases.html"><small>← Previous</small>The Backup That Wasn't</a>
+        <a class="next" href="06-cdn.html"><small>Next incident →</small>The Cache That Leaked Accounts</a>
+    </nav>
+
+</div>
 </body>
 </html>

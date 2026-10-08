@@ -3,33 +3,261 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Module 6: Content Delivery Network (CDN)</title>
+    <title>06 · The Cache That Leaked Accounts — CDN</title>
+    <meta name="description" content="Incident 06: Black Friday, an overloaded origin, a stale deploy, and a CDN config that shows users each other's accounts. Learn pull vs push, Cache-Control, cache keys, invalidation and global blast radius.">
     <link rel="stylesheet" href="../styles.css">
+    <script>document.documentElement.classList.add('js')</script>
+    <script defer src="../assets/engine.js"></script>
 </head>
-<body>
-    <header>
-        <h1>Module 6: Content Delivery Network (CDN)</h1>
-        <a href="../index.html">Back to Home</a>
+<body data-module="06">
+<div class="wrap">
+
+    <nav class="topbar"><a href="../index.html">← Year One at Brightcart</a><span>Incident 06 / 10</span></nav>
+
+    <header class="mod-header">
+        <p class="kicker">Month 6 · Content Delivery Networks</p>
+        <h1>The Cache That Leaked Accounts</h1>
+        <ul class="meta">
+            <li>Role: on-call during Black Friday week</li>
+            <li>3 decisions</li>
+            <li>~15 min</li>
+        </ul>
     </header>
 
-    <div class="section">
-        <h2>How a CDN Works</h2>
-        <p>A Content Delivery Network (CDN) is a geographically distributed network of proxy servers and their data centers. The goal is to provide high availability and performance by distributing the service spatially relative to end-users.</p>
-        <p>When a user requests content from a website that uses a CDN, the CDN redirects the request to a server that is geographically closest to the user. This reduces latency and improves the user experience.</p>
-
-        <h3>Push vs. Pull Zones</h3>
-        <ul>
-            <li><strong>Pull Zone:</strong> The CDN pulls content from your origin server when it's requested for the first time. The content is then cached on the CDN's edge servers for subsequent requests. This is the most common type of CDN.</li>
-            <li><strong>Push Zone:</strong> You upload your content directly to the CDN's storage. This is useful for large files that don't change often, such as video files or software downloads.</li>
-        </ul>
-
-        <h3>Benefits of a CDN</h3>
-        <ul>
-            <li><strong>Improved Performance:</strong> By caching content closer to users, CDNs can significantly reduce page load times.</li>
-            <li><strong>Increased Availability:</strong> CDNs can handle traffic spikes and protect against DDoS attacks.</li>
-            <li><strong>Reduced Load on Origin Server:</strong> By serving content from the cache, CDNs reduce the load on your origin server.</li>
-        </ul>
+    <div class="pager">
+<div class="line"><span class="ts">Mon 09:15</span>  origin-web bandwidth <span class="warn">8.7 Gbps / 10 Gbps</span>   78% of bytes: /images/* /static/*</div>
+<div class="line"><span class="ts">Mon 09:15</span>  p95 page load (Sydney): <span class="err">6.8s</span>   (Virginia: 1.1s)</div>
+<div class="line"><span class="ts">Mon 09:16</span>  <b>@devin</b>: Black Friday is Friday. Traffic forecast 6x. We can't 6x our origin bandwidth by Friday.</div>
     </div>
 
+    <p>Brightcart serves everything (HTML, JavaScript, CSS and 2 million product images) from origin servers in one region: us-east. Australian customers wait almost 7 seconds per page, because every request crosses the Pacific twice. And the origin's network link is nearly full.</p>
+
+    <aside class="mentor">
+        <div class="avatar">M</div>
+        <div>
+            <p class="who">Morgan · Staff SRE · 14 years on-call</p>
+            <p>The speed of light is the one dependency you can't optimize. Sydney to Virginia is about 200ms round trip, before any TLS handshake. The fastest request is the one that never reaches your origin. But careful: a CDN is a cache with 300 locations and a global config switch. Respect it.</p>
+        </div>
+    </aside>
+
+    <div class="decision" data-id="d1">
+        <span class="label">Decision 1 · Monday</span>
+        <h3>How do you get through Black Friday?</h3>
+        <div class="choice" data-verdict="bad">
+            <button type="button">Upgrade the origin link to 40 Gbps and add more web servers.</button>
+            <div class="outcome" hidden>
+                <p>The network upgrade has a 3-week lead time. Even if it arrived, Sydney would still take 6.8 seconds: bandwidth doesn't fix latency. And you're paying to serve the same unchanging JPEG 40 million times from one building.</p>
+            </div>
+        </div>
+        <div class="choice" data-verdict="good">
+            <button type="button">Put a pull-through CDN in front of /static and /images with long cache lifetimes, and use content-hashed filenames.</button>
+            <div class="outcome" hidden>
+                <p>On the first request for <code>/images/sku-1182.jpg</code>, the Sydney edge fetches it from origin once, then serves every Australian customer from Sydney. With <code>Cache-Control: public, max-age=31536000, immutable</code> and filenames that change when the content changes, the cache hit ratio reaches 96%. Origin bandwidth drops to 1.2 Gbps and Sydney loads pages in 1.9 seconds.</p>
+            </div>
+        </div>
+        <div class="choice" data-verdict="ok">
+            <button type="button">Use a push CDN: upload all 2M images to the CDN's storage ahead of time.</button>
+            <div class="outcome" hidden>
+                <p>It works. But now every new product image needs an upload pipeline, deletes need syncing, and you're storing (and paying for) 2 million images in every region, including long-tail ones nobody views. Push suits large, rarely changing files like video or installers. For a catalog, pull is simpler.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="gated" data-after="d1">
+        <p>Wednesday. The frontend team deploys a new checkout page. Within minutes:</p>
+        <div class="pager">
+<div class="line"><span class="ts">Wed 14:02</span>  js errors/min <span class="err">4,120</span>   "TypeError: initCheckoutV2 is not a function"</div>
+<div class="line"><span class="ts">Wed 14:02</span>  checkout conversion <span class="err">−38%</span></div>
+        </div>
+        <p>The new HTML calls <code>initCheckoutV2()</code>, but the CDN is serving the <em>old</em> <code>/static/app.js</code> from cache. It was uploaded under the same filename with a 24-hour max-age.</p>
+
+        <div class="decision" data-id="d2">
+            <span class="label">Decision 2 · 14:04</span>
+            <h3>Fix it now, and make sure it never happens again.</h3>
+            <div class="choice" data-verdict="ok">
+                <button type="button">Purge the entire CDN cache globally.</button>
+                <div class="outcome" hidden>
+                    <p>It fixes the JS, and empties every edge everywhere at the same moment. Two days before Black Friday, 2 million images all miss at once and the origin link hits 10 Gbps. You just recreated the cold-cache stampede from Incident 03 on a global scale. Purge narrowly (one path) and fix the naming so you rarely need to purge at all.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="good">
+                <button type="button">Purge just /static/app.js now. Then switch the build to content-hashed filenames (app.3f9a1c.js) cached forever, with HTML cached briefly or not at all.</button>
+                <div class="outcome" hidden>
+                    <p>This is the standard pattern. Content-hashed assets never change, so they can be cached forever. A new deploy produces <em>new filenames</em>, and the short-lived HTML points to them. There's never a mismatch, and you almost never need to purge. Rollback is easy too: the old files are still there.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="bad">
+                <button type="button">Post on social media asking users to hard-refresh.</button>
+                <div class="outcome" hidden>
+                    <p>A hard refresh can't touch the CDN edge cache, only the browser's. Users refresh and get the same stale file from the Sydney edge. 4,000 errors a minute continue for 24 hours, and your social post goes semi-viral for the wrong reasons.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="gated" data-after="d2">
+        <p>Black Friday, 16:05. Origin CPU is high, so an engineer on the platform team adds a CDN rule to cache <code>/account/*</code> pages for 5 minutes, "to take load off origin." It ships globally at 16:08.</p>
+        <div class="pager">
+<div class="line"><span class="ts">16:19</span>  #support: "I'm logged in but the page shows someone else's name and address??"</div>
+<div class="line"><span class="ts">16:20</span>  #support: "my order history has orders I never made"</div>
+<div class="line"><span class="ts">16:20</span>  <span class="sev">SEV0</span> security: <span class="err">possible PII exposure</span></div>
+        </div>
+        <p>The CDN's cache key is the URL. <code>/account/orders</code> is the same URL for every user. The first user to load it got their page cached, and everyone after them in that region is seeing it.</p>
+
+        <div class="decision" data-id="d3">
+            <span class="label">Decision 3 · 16:21 · personal data is leaking every second</span>
+            <h3>What do you do first?</h3>
+            <div class="choice" data-verdict="bad">
+                <button type="button">Pull the CDN logs and find out exactly how many users were affected before you change anything.</button>
+                <div class="outcome" hidden>
+                    <p>Scoping the damage matters, but not <em>first</em>. Every minute you spend in logs, more users' addresses and order histories are served to strangers. The investigation takes 35 minutes, and the leak runs the whole time. In a data exposure, contain first, then investigate.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="ok">
+                <button type="button">Purge /account/* from the CDN.</button>
+                <div class="outcome" hidden>
+                    <p>The leaked pages disappear, and the very next request re-caches someone's account page, because the rule is still live. You're bailing water without plugging the hole. It buys about 30 seconds.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="good">
+                <button type="button">Roll back the CDN rule, then purge /account/*. Make origin send <code>Cache-Control: private, no-store</code> on personalized responses. Bring in security and legal to scope and notify.</button>
+                <div class="outcome" hidden>
+                    <p>Contain (roll back the rule), clean up (purge), then defend in depth: even if someone adds a bad rule again, origin explicitly marks personalized pages as uncacheable, and you add a CDN policy to never cache responses that set cookies or depend on an <code>Authorization</code> header. Then scope the impact from logs and notify affected users. Leak window: 13 minutes.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="gated" data-after="d3">
+
+        <p class="section-tag">Debrief</p>
+        <h2>What you just learned</h2>
+
+        <div class="card">
+            <h3>How a CDN works</h3>
+            <ol>
+                <li>The user's DNS lookup (or anycast routing) sends them to the nearest <strong>edge PoP</strong>, one of hundreds worldwide.</li>
+                <li>The edge checks its cache using the <strong>cache key</strong> (by default roughly host + path + query string).</li>
+                <li><strong>Hit:</strong> serve from the edge, in milliseconds. <strong>Miss:</strong> fetch from origin (often via a regional <em>origin shield</em> so 300 edges don't all hit origin), store it, serve it.</li>
+                <li>Bonus: TLS terminates close to the user, and the CDN soaks up DDoS traffic before it reaches you.</li>
+            </ol>
+        </div>
+
+        <div class="card">
+            <h3>Pull vs. push</h3>
+            <div class="table-wrap"><table>
+                <tr><th></th><th>Pull zone</th><th>Push zone</th></tr>
+                <tr><td>How</td><td>Edge fetches from origin on first miss</td><td>You upload content to CDN storage</td></tr>
+                <tr><td>Good for</td><td>Websites, catalogs, APIs. The default</td><td>Big, rarely changing files: video, game patches, installers</td></tr>
+                <tr><td>Watch out</td><td>First request per region is slow, and cold-cache stampedes</td><td>Sync pipeline, storage cost for the long tail</td></tr>
+            </table></div>
+        </div>
+
+        <div class="card">
+            <h3>Cache-Control cheat sheet</h3>
+            <div class="table-wrap"><table>
+                <tr><th>Directive</th><th>Meaning</th><th>Use for</th></tr>
+                <tr><td><code>public, max-age=31536000, immutable</code></td><td>Anyone may cache it for a year, and it never changes</td><td>Content-hashed JS, CSS and images</td></tr>
+                <tr><td><code>public, max-age=60, s-maxage=300</code></td><td>Browsers keep it 60s, shared caches (CDN) 300s</td><td>Public pages that change occasionally</td></tr>
+                <tr><td><code>stale-while-revalidate=30</code></td><td>Serve stale while refreshing in the background</td><td>Smoothing over origin slowness</td></tr>
+                <tr><td><code>private</code></td><td>Only the user's browser may cache it, not shared caches</td><td>Personalized pages</td></tr>
+                <tr><td><code>no-store</code></td><td>Nobody stores it, anywhere</td><td>Account pages, PII, payment pages</td></tr>
+            </table></div>
+        </div>
+
+        <div class="card">
+            <h3>Invalidation strategies</h3>
+            <ul>
+                <li><strong>Versioned (content-hashed) URLs:</strong> the best option. Never invalidate, just change the name.</li>
+                <li><strong>Targeted purge:</strong> purge by path or surrogate key/tag (e.g. every page tagged <code>product-1182</code>).</li>
+                <li><strong>Short TTL + stale-while-revalidate:</strong> freshness and resilience together.</li>
+                <li><strong>Global purge:</strong> a last resort. It's a self-inflicted stampede.</li>
+            </ul>
+        </div>
+
+        <p class="section-tag">It happened for real</p>
+        <h2>Real postmortems</h2>
+
+        <article class="postmortem">
+            <div class="pm-head"><span>Valve · Steam Store</span><span class="dur">Dec 25, 2015 · ~90 minutes</span></div>
+            <div class="pm-body">
+                <p>During a Christmas DDoS attack, with traffic about 2,000% above a typical Steam Sale, Valve's web-caching partner deployed more aggressive caching rules to protect the origin. One rule was misconfigured, and pages generated for one logged-in user were served to others. For about 34,000 users, store pages containing billing addresses, purchase history, partial card digits and email addresses may have been seen by other users.</p>
+                <p class="lesson"><strong>Lesson:</strong> Decision 3, for real. A caching change made under pressure to protect the origin exposed personal data. Personalized responses must be uncacheable <em>by default at origin</em>, so a CDN rule can't override it by mistake.</p>
+                <p class="source">Source: <a href="https://store.steampowered.com/oldnews/19852">Steam: Security Update (Valve statement)</a></p>
+            </div>
+        </article>
+
+        <article class="postmortem">
+            <div class="pm-head"><span>Fastly · Global outage</span><span class="dur">Jun 8, 2021 · ~49 minutes</span></div>
+            <div class="pm-body">
+                <p>A software deploy on May 12 introduced a latent bug that a specific, valid customer configuration could trigger. On June 8, a customer pushed exactly that configuration. It propagated globally, and <strong>85% of Fastly's network</strong> began returning errors. Major news sites, retailers and government sites went down at once. Fastly found the cause within minutes and recovered 95% of the network in 49 minutes.</p>
+                <p class="lesson"><strong>Lesson:</strong> a CDN is a globally distributed system with a <em>global config plane</em>. One bad config can reach every edge in seconds.</p>
+                <p class="source">Source: <a href="https://www.fastly.com/blog/summary-of-june-8-outage">Fastly: Summary of June 8 outage</a></p>
+            </div>
+        </article>
+
+        <article class="postmortem">
+            <div class="pm-head"><span>Cloudflare · WAF regex</span><span class="dur">Jul 2, 2019 · 27 minutes</span></div>
+            <div class="pm-body">
+                <p>A new WAF (web application firewall) rule contained a regular expression that backtracked catastrophically. It was deployed globally at once and drove CPUs to nearly 100% on every core handling HTTP traffic, across Cloudflare's entire network. Proxying, CDN and WAF went down for 27 minutes.</p>
+                <p class="lesson"><strong>Lesson:</strong> roll out edge config the way you roll out code: canary first, then staged, with automatic rollback. A change that goes everywhere at once fails everywhere at once.</p>
+                <p class="source">Source: <a href="https://blog.cloudflare.com/details-of-the-cloudflare-outage-on-july-2-2019/">Cloudflare: Details of the Cloudflare outage on July 2, 2019</a></p>
+            </div>
+        </article>
+
+        <p class="section-tag">Field notes</p>
+        <h2>Morgan's rules of thumb</h2>
+        <ol class="rules">
+            <li>Content-hash your assets and cache them forever. Keep HTML short-lived.</li>
+            <li>Personalized responses get <code>private, no-store</code> at origin. Don't rely on the CDN config alone.</li>
+            <li>Know your cache key. If the response varies by something that's not in the key, you will leak or corrupt.</li>
+            <li>Purge narrowly. A global purge is a self-inflicted stampede.</li>
+            <li>In a data leak: contain, clean up, then investigate. In that order.</li>
+        </ol>
+
+        <p class="section-tag">Your turn</p>
+        <h2>Design challenge</h2>
+        <div class="card">
+            <p><strong>Cache the product page.</strong> Brightcart's product page HTML is 95% identical for everyone (title, photos, description, reviews) but shows a personalized header ("Hi, Ana · 3 items in cart") and region-specific prices (USD, AUD, JPY).</p>
+            <p>Can you cache it at the CDN? How? What goes in the cache key? How do you update the price within 60 seconds of a change?</p>
+        </div>
+        <details>
+            <summary>Hints</summary>
+            <ul>
+                <li>Split the page: cache the shared shell, fetch the personalized bits separately (client-side, or edge-side includes).</li>
+                <li>Currency could go in the URL or the cache key (<code>Vary</code>-style), but never the user's identity.</li>
+                <li>Surrogate keys / cache tags let you purge "every page that shows SKU 1182".</li>
+            </ul>
+        </details>
+        <details>
+            <summary>What a strong answer covers</summary>
+            <ul>
+                <li>A cacheable shell keyed by path + region or currency, with a short TTL plus stale-while-revalidate.</li>
+                <li>The personalized header loaded via an uncacheable API call (<code>private, no-store</code>).</li>
+                <li>Tag-based purge on price change, with the TTL as backstop. Possibly edge compute for the composition.</li>
+                <li>An explicit check that no <code>Set-Cookie</code> is ever present on cached responses.</li>
+            </ul>
+        </details>
+
+        <p class="section-tag">Live drill</p>
+        <h2>Run it again with a real Game Master</h2>
+        <div class="drill">
+            <pre id="drill">Act as Morgan, a Staff SRE running a live incident simulation during Black Friday at an e-commerce company. Start with an overloaded origin and slow international page loads, then a stale-JavaScript deploy problem, then a CDN misconfiguration that leaks personalized pages between users. Narrate with CDN metrics (hit ratio, origin bandwidth, edge errors) and support tickets. Make me decide; play out consequences; don't reveal answers. Cover pull vs push, Cache-Control, cache keys, purging vs versioning, and staged config rollouts. End with a postmortem and grade me.</pre>
+            <button class="copy" type="button" data-copy="drill">Copy</button>
+        </div>
+
+        <div class="scoreboard">
+            <h3>Incident resolved</h3>
+            <p data-score></p>
+            <button type="button" data-reset>Replay this incident</button>
+        </div>
+    </div>
+
+    <nav class="modnav">
+        <a href="05-message-queues.html"><small>← Previous</small>Everyone Got Charged Twice</a>
+        <a class="next" href="07-api-design.html"><small>Next incident →</small>The App We Broke</a>
+    </nav>
+
+</div>
 </body>
 </html>

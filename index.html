@@ -3,50 +3,100 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>System Design Reference</title>
+    <title>Year One at Brightcart — System Design Field Training</title>
+    <meta name="description" content="Learn system design by living through it: 10 interactive incidents based on real postmortems from GitHub, AWS, Facebook, GitLab, Cloudflare and more. Make the call, see the consequences, get the debrief.">
     <link rel="stylesheet" href="styles.css">
+    <script>document.documentElement.classList.add('js')</script>
+    <script defer src="assets/engine.js"></script>
 </head>
 <body>
+<div class="wrap">
 
-    <header>
-        <h1>System Design Reference</h1>
-        <p>A curated collection of system design topics, architectural patterns, and recommended resources.</p>
+    <header class="hero">
+        <p class="kicker">System Design Field Training</p>
+        <h1>Year One at Brightcart</h1>
+        <p class="lede">You just joined a fast-growing online marketplace as a backend engineer. Over the next twelve months, everything will break at least once. You'll be on call when it does.</p>
     </header>
 
-    <div class="section" id="modules">
-        <h2>Modules</h2>
-        <ul class="module-list">
-            <li><a href="modules/01-scalability.html">1. Scalability & Elasticity</a></li>
-            <li><a href="modules/02-load-balancing.html">2. Load Balancing</a></li>
-            <li><a href="modules/03-caching.html">3. Caching Strategies</a></li>
-            <li><a href="modules/04-databases.html">4. Databases (SQL vs. NoSQL)</a></li>
-            <li><a href="modules/05-message-queues.html">5. Message Queues & Event-Driven Architecture</a></li>
-            <li><a href="modules/06-cdn.html">6. Content Delivery Network (CDN)</a></li>
-            <li><a href="modules/07-api-design.html">7. API Design & Gateways</a></li>
-            <li><a href="modules/08-consistency-models.html">8. Consistency Models</a></li>
-            <li><a href="modules/09-distributed-storage.html">9. Distributed Storage</a></li>
-            <li><a href="modules/10-case-study-tinyurl.html">10. Case Study: TinyURL</a></li>
-        </ul>
+    <div class="pager">
+<div class="line"><span class="ts">Day 1 09:00</span>  <b>@morgan (Staff SRE)</b>: Welcome aboard. Nobody learns this stuff from definitions. You learn it at 2am with the pager going off. So that's how we'll train you. I'll be there for every one.</div>
+<div class="line"><span class="ts">Day 1 09:00</span>  <b>@morgan</b>: Every incident you'll face is modeled on something that really happened to a real company. Make the call. Live with the consequences. Then we debrief.</div>
     </div>
 
-    <div class="section" id="recommended-books">
-        <h2>Recommended Books</h2>
-        <ul class="book-list">
-            <li>
-                <strong>"Designing Data-Intensive Applications"</strong> by Martin Kleppmann.
-            </li>
-            <li>
-                <strong>"System Design Interview – An insider's guide"</strong> by Alex Xu.
-            </li>
-            <li>
-                <strong>"Clean Architecture"</strong> by Robert C. Martin.
-            </li>
-        </ul>
+    <h2>How it works</h2>
+    <ol class="loop">
+        <li><strong>The page</strong>A realistic incident cold open</li>
+        <li><strong>Your call</strong>Choose, before you know the answer</li>
+        <li><strong>Consequences</strong>See what happens, including what you didn't pick</li>
+        <li><strong>Debrief</strong>The concepts, tied to what just happened</li>
+        <li><strong>Real postmortem</strong>The company it actually happened to</li>
+        <li><strong>Your turn</strong>An open design challenge + a live drill with Claude</li>
+    </ol>
+    <p style="color:var(--muted);font-size:.92rem">Your progress and scores are saved in this browser. Play in order for the story, or jump to any topic.</p>
+
+    <h2>The incidents</h2>
+    <ul class="chapters">
+        <li data-chapter="01"><a href="modules/01-scalability.html">
+            <span class="when">Week 2</span>
+            <span><span class="title">The Midnight Drop</span><span class="topic">Scalability &amp; Elasticity · stateless tiers, autoscaling lag, load shedding, shard keys</span></span>
+            <span class="status">Not started</span></a></li>
+        <li data-chapter="02"><a href="modules/02-load-balancing.html">
+            <span class="when">Week 5</span>
+            <span><span class="title">Half the Fleet Is Lying</span><span class="topic">Load Balancing · L4/L7, algorithms, health checks, outlier detection, sticky sessions</span></span>
+            <span class="status">Not started</span></a></li>
+        <li data-chapter="03"><a href="modules/03-caching.html">
+            <span class="when">Month 2</span>
+            <span><span class="title">The Night the Cache Went Cold</span><span class="topic">Caching · cache-aside to write-back, eviction, stampedes, invalidation</span></span>
+            <span class="status">Not started</span></a></li>
+        <li data-chapter="04"><a href="modules/04-databases.html">
+            <span class="when">Month 4</span>
+            <span><span class="title">The Backup That Wasn't</span><span class="topic">Databases · SQL vs NoSQL, ACID, replicas, read-your-writes, backups</span></span>
+            <span class="status">Not started</span></a></li>
+        <li data-chapter="05"><a href="modules/05-message-queues.html">
+            <span class="when">Month 5</span>
+            <span><span class="title">Everyone Got Charged Twice</span><span class="topic">Message Queues · delivery guarantees, idempotency, DLQs, outbox, queue vs log</span></span>
+            <span class="status">Not started</span></a></li>
+        <li data-chapter="06"><a href="modules/06-cdn.html">
+            <span class="when">Month 6</span>
+            <span><span class="title">The Cache That Leaked Accounts</span><span class="topic">CDN · pull vs push, Cache-Control, cache keys, purging, global blast radius</span></span>
+            <span class="status">Not started</span></a></li>
+        <li data-chapter="07"><a href="modules/07-api-design.html">
+            <span class="when">Month 7</span>
+            <span><span class="title">The App We Broke</span><span class="topic">API Design &amp; Gateways · versioning, idempotency keys, rate limiting, backoff + jitter</span></span>
+            <span class="status">Not started</span></a></li>
+        <li data-chapter="08"><a href="modules/08-consistency-models.html">
+            <span class="when">Month 9</span>
+            <span><span class="title">Split Brain</span><span class="topic">Consistency Models · CAP/PACELC, session guarantees, quorums, conflict resolution</span></span>
+            <span class="status">Not started</span></a></li>
+        <li data-chapter="09"><a href="modules/09-distributed-storage.html">
+            <span class="when">Month 10</span>
+            <span><span class="title">One Typo, Four Hours</span><span class="topic">Distributed Storage · object/block/file, GFS/HDFS, erasure coding, failure domains</span></span>
+            <span class="status">Not started</span></a></li>
+        <li data-chapter="10"><a href="modules/10-case-study-tinyurl.html">
+            <span class="when">Month 12</span>
+            <span><span class="title">Your First Design Review</span><span class="topic">Case Study: URL Shortener · everything comes together, plus a launch-day hot key</span></span>
+            <span class="status">Not started</span></a></li>
+    </ul>
+
+    <h2>Gain experience faster: live drills</h2>
+    <p>The scripted incidents have three choices each. Real incidents have infinite ones. Every module ends with a prompt that turns Claude into Morgan, a Game Master who runs the incident live, lets you try <em>anything</em>, and plays out the consequences. Here's a general one to start with:</p>
+    <div class="drill">
+        <pre id="drill-general">Act as Morgan, a Staff SRE with 14 years of on-call experience, and run a live incident simulation for me. Pick a realistic production incident at a mid-size e-commerce company (based on patterns from real public postmortems). Narrate in real time with pager alerts, metrics, and logs. Don't give me answers: let me ask for data and take actions, then play out realistic consequences, including second-order effects. Escalate if I make it worse. When it's resolved, run a blameless postmortem: timeline, contributing factors, what I did well, what a Staff engineer would have done differently, and the real-world incident it resembles.</pre>
+        <button class="copy" type="button" data-copy="drill-general">Copy</button>
     </div>
+
+    <h2>Go deeper</h2>
+    <ul>
+        <li><strong>Designing Data-Intensive Applications</strong> by Martin Kleppmann. The theory behind Incidents 03, 04, 05 and 08.</li>
+        <li><strong>System Design Interview: An Insider's Guide</strong> by Alex Xu. Interview-format walkthroughs like Incident 10.</li>
+        <li><strong>Site Reliability Engineering</strong> (Google, free online). How on-call, postmortems and load shedding work in practice.</li>
+        <li><a href="https://github.com/danluu/post-mortems">danluu/post-mortems</a>. A huge collection of real postmortems. Read one a week.</li>
+    </ul>
 
     <footer class="footer">
-        <p>Inspired by the giants on whose shoulders we stand.</p>
+        <p>Brightcart and its people are fictional. The postmortems are real. Thanks to every team that published theirs so the rest of us could learn.</p>
     </footer>
 
+</div>
 </body>
 </html>

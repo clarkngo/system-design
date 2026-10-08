@@ -3,66 +3,265 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Module 10: Case Study - TinyURL</title>
+    <title>10 · Your First Design Review — Case Study: URL Shortener</title>
+    <meta name="description" content="Final chapter: you lead the design of Brightcart's link shortener, from estimates and ID generation to redirect codes and a viral hot key on launch day. Everything from the first nine incidents comes together.">
     <link rel="stylesheet" href="../styles.css">
+    <script>document.documentElement.classList.add('js')</script>
+    <script defer src="../assets/engine.js"></script>
 </head>
-<body>
-    <header>
-        <h1>Module 10: Case Study - TinyURL</h1>
-        <a href="../index.html">Back to Home</a>
+<body data-module="10">
+<div class="wrap">
+
+    <nav class="topbar"><a href="../index.html">← Year One at Brightcart</a><span>Final chapter · 10 / 10</span></nav>
+
+    <header class="mod-header">
+        <p class="kicker">Month 12 · Case Study: URL Shortener</p>
+        <h1>Your First Design Review</h1>
+        <ul class="meta">
+            <li>Role: tech lead (promotion project)</li>
+            <li>3 decisions + launch day</li>
+            <li>~20 min</li>
+        </ul>
     </header>
 
-    <div class="section">
-        <h2>Problem Statement</h2>
-        <p>Design a URL shortening service like TinyURL. The service should take a long URL and generate a unique, short URL. When a user visits the short URL, they should be redirected to the original long URL.</p>
+    <div class="pager">
+<div class="line"><span class="ts">Mon 09:00</span>  <b>@devin</b>: Promo packet time 🎉 You're leading <b>brt.ly</b>, Brightcart's link shortener for marketing campaigns, influencer links and SMS. Design review Thursday with Morgan and Rhea (Principal Eng).</div>
+<div class="line"><span class="ts">Mon 09:01</span>  <b>@priya (Marketing)</b>: Must-haves: short links, <b>click analytics per link</b>, and links people can't guess (some are private early-access sale links).</div>
+    </div>
 
-        <h3>Requirements</h3>
+    <aside class="mentor">
+        <div class="avatar">M</div>
+        <div>
+            <p class="who">Morgan · Staff SRE · 14 years on-call</p>
+            <p>A year ago you didn't know why sessions break when you scale out. Now you're running the review. Here's how Rhea runs these: requirements, then numbers, then design, then "what breaks first." She <em>will</em> ask about the requirement you forgot. Re-read Priya's message.</p>
+        </div>
+    </aside>
+
+    <p class="section-tag">Step 1</p>
+    <h2>Requirements</h2>
+    <div class="card">
+        <p><strong>Functional</strong></p>
         <ul>
-            <li><strong>Functional:</strong>
-                <ul>
-                    <li>Given a long URL, return a short URL.</li>
-                    <li>Given a short URL, redirect to the original long URL.</li>
-                    <li>The short URL should be a combination of characters `[a-zA-Z0-9]`.</li>
-                </ul>
-            </li>
-            <li><strong>Non-Functional:</strong>
-                <ul>
-                    <li>The service should be highly available.</li>
-                    <li>The redirection should be fast (low latency).</li>
-                    <li>The short URLs should not be guessable.</li>
-                </ul>
-            </li>
+            <li>Given a long URL, return a short URL like <code>brt.ly/aZ3k9Qx</code> using characters <code>[a-zA-Z0-9]</code>.</li>
+            <li>Visiting the short URL redirects to the long URL.</li>
+            <li>Count clicks per link (by day, country and referrer).</li>
+            <li>Optional: custom aliases (<code>brt.ly/blackfriday</code>) and expiry.</li>
+        </ul>
+        <p><strong>Non-functional</strong></p>
+        <ul>
+            <li>Redirects are fast (p99 &lt; 50ms at the edge) and highly available. A broken link in a 5-million-recipient SMS is a disaster.</li>
+            <li>Short codes are <strong>not guessable or enumerable</strong> (private sale links).</li>
+            <li>Read-heavy: about 100 redirects per link created.</li>
         </ul>
     </div>
 
-    <div class="section">
-        <h2>High-Level Design</h2>
-        <p>The core of the service is a key-value store where the key is the short URL and the value is the long URL.</p>
-        <ol>
-            <li>The client sends a long URL to the service.</li>
-            <li>The service generates a unique short URL. A common approach is to use a base62 encoding of a counter.</li>
-            <li>The service stores the mapping between the short URL and the long URL in a database.</li>
-            <li>The service returns the short URL to the client.</li>
-        </ol>
+    <p class="section-tag">Step 2</p>
+    <h2>Back-of-the-envelope numbers</h2>
+    <div class="table-wrap"><table>
+        <tr><th>Quantity</th><th>Estimate</th><th>How</th></tr>
+        <tr><td>New links</td><td>100M / month ≈ <strong>40 writes/s</strong></td><td>100M ÷ 2.6M seconds per month</td></tr>
+        <tr><td>Redirects</td><td>100:1 ≈ <strong>4,000 reads/s</strong> avg, ~40k peak</td><td>×10 for peaks</td></tr>
+        <tr><td>Storage (5 years)</td><td>6B links × ~500 B ≈ <strong>3 TB</strong></td><td>URL + code + metadata</td></tr>
+        <tr><td>Code length</td><td>62<sup>7</sup> ≈ <strong>3.5 trillion</strong> codes</td><td>7 base62 chars; 6B used ≈ 0.2% density</td></tr>
+        <tr><td>Click events</td><td>4k–40k events/s</td><td>One per redirect</td></tr>
+    </table></div>
+    <p>Takeaway: storage is small (3 TB fits a few nodes). <strong>Reads and click analytics are the scaling problem</strong>, not storage.</p>
 
-        <h3>Redirection</h3>
-        <ol>
-            <li>The user clicks on the short URL.</li>
-            <li>The browser sends an HTTP request to the service.</li>
-            <li>The service looks up the long URL in the database using the short URL as the key.</li>
-            <li>The service sends an HTTP 301 redirect response to the browser with the long URL in the `Location` header.</li>
-            <li>The browser redirects to the long URL.</li>
-        </ol>
+    <p class="section-tag">Step 3</p>
+    <h2>The design review</h2>
+
+    <div class="decision" data-id="d1">
+        <span class="label">Rhea's first question</span>
+        <h3>"How do you generate the short code?"</h3>
+        <div class="choice" data-verdict="bad">
+            <button type="button">A global auto-increment counter, base62-encoded: 1 → <code>b</code>, 2 → <code>c</code> … 125 → <code>cb</code>.</button>
+            <div class="outcome" hidden>
+                <p>Rhea: "Codes are sequential. If I get <code>brt.ly/4kZ9</code>, I can try <code>4kZa</code>, <code>4kZb</code>… and walk every private early-access link you've ever made. That violates a stated requirement. Also, who owns the counter? It's a single point of coordination." This is the standard textbook answer, and it fails Priya's requirement.</p>
+            </div>
+        </div>
+        <div class="choice" data-verdict="ok">
+            <button type="button">Hash the long URL (MD5 or SHA-256) and take the first 7 base62 characters.</button>
+            <div class="outcome" hidden>
+                <p>Not guessable from outside, which is good. But truncating means <strong>collisions</strong>, so you still need a check-and-retry. And the same long URL always produces the same code, so two campaigns linking to the same page share analytics, and anyone who knows the long URL can compute its code. Workable if you add a salt and collision handling.</p>
+            </div>
+        </div>
+        <div class="choice" data-verdict="good">
+            <button type="button">7 random base62 characters from a cryptographically secure random generator. Insert with a uniqueness constraint and retry on the rare collision. (At scale, workers can pre-generate pools of unused keys.)</button>
+            <div class="outcome" hidden>
+                <p>Unguessable: about 3.5 trillion possibilities with only 0.2% used, so random probing almost always misses (add rate limiting on 404s to make scanning pointless). No central counter, since any server can generate codes. Collisions are rare and caught by the unique constraint. Rhea nods: "And custom aliases?" You: "Same table, and the same uniqueness check."</p>
+            </div>
+        </div>
     </div>
 
-    <div class="section">
-        <h2>Further Considerations</h2>
+    <div class="gated" data-after="d1">
+        <div class="decision" data-id="d2">
+            <span class="label">Morgan's question</span>
+            <h3>"Which HTTP status does the redirect return?"</h3>
+            <div class="choice" data-verdict="bad">
+                <button type="button"><code>301 Moved Permanently</code>: it's the fastest, since browsers cache it.</button>
+                <div class="outcome" hidden>
+                    <p>Morgan: "Exactly. Browsers cache it. After the first click, a user's repeat clicks never reach your server, so <strong>your click analytics undercount</strong>. You also can't change or disable a link once browsers have cached it, for example if a campaign URL is wrong or a link gets abused." 301 is fine for permanent site moves. It conflicts with the analytics requirement.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="good">
+                <button type="button"><code>302 Found</code> (or <code>307</code>) with <code>Cache-Control: private, max-age=0</code>, so every click comes through us for counting.</button>
+                <div class="outcome" hidden>
+                    <p>Every click reaches your edge, analytics are complete, and you can update or kill a link instantly. The cost is one extra round trip on repeat clicks, which you keep cheap by serving redirects from the edge (next decision). Morgan: "Good. You remembered Priya's requirement."</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="ok">
+                <button type="button">Return <code>200</code> with an HTML page that runs JavaScript analytics, then redirects.</button>
+                <div class="outcome" hidden>
+                    <p>It works and gives you rich client-side analytics, but it adds a page load to every click, breaks for clients without JavaScript (some SMS previews, bots, curl), and confuses link-preview crawlers. Use a real 3xx unless you truly need an interstitial page.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="gated" data-after="d2">
+        <p class="section-tag">Step 4</p>
+        <h2>The architecture you present</h2>
+        <pre>
+                         ┌──────────── create path (≈40/s) ─────────────┐
+ Marketer ── POST /links ─▶ API (auth, rate limit) ─▶ Links DB (KV / Postgres)
+                                                         code ─▶ long_url, owner, expiry
+                         └───────────────────────────────────────────────┘
+
+                         ┌──────────── redirect path (4k–40k/s) ─────────┐
+ Clicker ── GET /aZ3k9Qx ─▶ Edge / CDN worker ─▶ local cache ─▶ Redis ─▶ Links DB
+                              │  302 + Location
+                              └─▶ click event ─▶ Kafka ─▶ stream aggregator ─▶ Analytics store
+                         └───────────────────────────────────────────────┘</pre>
         <ul>
-            <li><strong>Database Choice:</strong> A NoSQL database like Redis or Cassandra would be a good choice for its fast key-value lookups and scalability.</li>
-            <li><strong>Scalability:</strong> The service can be scaled horizontally by adding more servers behind a load balancer. The database can be sharded to distribute the data.</li>
-            <li><strong>Analytics:</strong> We could add an analytics service that tracks how many times a short URL is clicked.</li>
+            <li><strong>Links DB:</strong> a key-value lookup by code. DynamoDB or Cassandra scale trivially, and Postgres is also fine at 3 TB with replicas. <em>(Incident 04: choose by access pattern.)</em></li>
+            <li><strong>Cache layers:</strong> link mappings almost never change, so cache them aggressively at the edge and in Redis, with jittered TTLs and request coalescing. <em>(Incident 03.)</em></li>
+            <li><strong>Clicks:</strong> fire-and-forget events to a log, aggregated asynchronously. Never write to the database on the redirect path. <em>(Incident 05.)</em></li>
+            <li><strong>API:</strong> idempotent creation, per-key rate limits, abuse checks on submitted URLs. <em>(Incident 07.)</em></li>
         </ul>
+        <p>Approved. Launch is in three weeks.</p>
+
+        <div class="pager">
+<div class="line"><span class="ts">Launch +6d 19:02</span>  a celebrity with 90M followers posts <b>brt.ly/kX8pQ2m</b> (Brightcart collab drop)</div>
+<div class="line"><span class="ts">19:03</span>  redirects/s: <span class="err">212,000</span>  →  <span class="err">96% for one code</span></div>
+<div class="line"><span class="ts">19:03</span>  links-db shard 7 cpu <span class="err">100%</span>   click_count UPDATE lock waits <span class="err">38s</span></div>
+<div class="line"><span class="ts">19:03</span>  <span class="sev">SEV1</span> redirect p99 <span class="err">9.4s</span> (all links on shard 7)</div>
+        </div>
+        <p>It turns out someone added a "quick" feature after the review: <code>UPDATE links SET click_count = click_count + 1</code> on every redirect, for a live counter in the dashboard. One row is now taking 200,000 writes a second.</p>
+
+        <div class="decision" data-id="d3">
+            <span class="label">Launch day · 19:04</span>
+            <h3>One link, 200k clicks/second. Fix it.</h3>
+            <div class="choice" data-verdict="bad">
+                <button type="button">Reshard the links table across 32 shards instead of 8.</button>
+                <div class="outcome" hidden>
+                    <p>A hot <em>key</em> isn't fixed by more shards: one code always lives on one shard. Resharding live during a spike makes everything worse, and the celebrity's link still hammers a single row. (Incident 01, Decision 3, all over again.)</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="good">
+                <button type="button">Remove the synchronous counter: emit click events to Kafka and aggregate asynchronously. Serve the hot mapping from the edge and in-process caches so the redirect never touches the database.</button>
+                <div class="outcome" hidden>
+                    <p>The lock contention vanishes immediately, because the redirect path is now read-only and cached at the edge. Clicks flow into the log at 200k/s, which is easy for a partitioned stream. The dashboard counter updates every few seconds from the aggregator, which is plenty "live." p99 back to 22ms by 19:09. The drop sells out and nobody outside the team knows how close it came.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="ok">
+                <button type="button">Turn off click counting entirely until the spike passes.</button>
+                <div class="outcome" hidden>
+                    <p>Redirects recover in 2 minutes, and you've stopped the bleeding. But marketing loses analytics for the single most valuable link they've ever had, which was the whole point of the product. Fine as an emergency stopgap, but you still need the async design.</p>
+                </div>
+            </div>
+        </div>
     </div>
 
+    <div class="gated" data-after="d3">
+
+        <p class="section-tag">Debrief</p>
+        <h2>Your year, in one system</h2>
+        <p>The URL shortener is a classic interview question because it touches almost everything. Here's how your year maps onto it:</p>
+        <div class="table-wrap"><table>
+            <tr><th>Incident</th><th>Where it shows up in brt.ly</th></tr>
+            <tr><td>01 Scalability</td><td>Stateless redirect tier scaled horizontally. Hot keys versus shard keys</td></tr>
+            <tr><td>02 Load balancing</td><td>Anycast/edge routing, health checks that don't take out the whole fleet</td></tr>
+            <tr><td>03 Caching</td><td>Edge, local and Redis cache layers. Coalescing for viral links</td></tr>
+            <tr><td>04 Databases</td><td>KV access pattern, unique constraint on code, tested backups</td></tr>
+            <tr><td>05 Queues</td><td>Click events through a log, idempotent aggregation</td></tr>
+            <tr><td>06 CDN</td><td>Redirects served at the edge. Never cache a private link's response publicly</td></tr>
+            <tr><td>07 API design</td><td>Idempotent creation, rate limits, 302 vs 301</td></tr>
+            <tr><td>08 Consistency</td><td>New links need read-your-writes. Analytics can be eventual</td></tr>
+            <tr><td>09 Storage</td><td>Analytics history in object storage or a warehouse, with lifecycle rules</td></tr>
+        </table></div>
+
+        <div class="card">
+            <h3>What interviewers listen for</h3>
+            <ul>
+                <li>You <strong>clarified requirements</strong> and caught the one that changes the design (non-guessable, analytics).</li>
+                <li>You did <strong>estimates</strong> and let them guide you: "storage is small, reads and analytics are the problem."</li>
+                <li>You named <strong>trade-offs</strong> (301 vs 302, counter vs random vs hash) instead of reciting one answer.</li>
+                <li>You asked <strong>"what breaks first?"</strong> unprompted: the hot key, the synchronous counter.</li>
+            </ul>
+        </div>
+
+        <p class="section-tag">It happened for real</p>
+        <h2>The same pattern at bigger scale</h2>
+
+        <article class="postmortem">
+            <div class="pm-head"><span>Discord · Hot partitions</span><span class="dur">2022</span></div>
+            <div class="pm-body">
+                <p>Discord's messages database struggled with "hot partitions": a single huge server's busy channel concentrating reads on one partition, which slowed down the <em>entire</em> cluster. Their fix included a request-coalescing data service in front of the database, so many simultaneous requests for the same data become one query. It's the same move you made for the viral link.</p>
+                <p class="lesson"><strong>Lesson:</strong> hot keys are inevitable in anything social or viral. Coalesce reads, cache at the edge, and keep writes off the hot row.</p>
+                <p class="source">Source: <a href="https://discord.com/blog/how-discord-stores-trillions-of-messages">Discord: How Discord Stores Trillions of Messages</a></p>
+            </div>
+        </article>
+
+        <p class="section-tag">Field notes</p>
+        <h2>Morgan's rules of thumb, the full year</h2>
+        <ol class="rules">
+            <li>Ask "what breaks first?" before "how do we scale?"</li>
+            <li>Requirements hide in other people's sentences. Re-read them.</li>
+            <li>Estimate first. The numbers tell you which problem you actually have.</li>
+            <li>Keep the hot path read-only and cached. Push writes and side effects to async pipelines.</li>
+            <li>Every design decision is a trade-off. If you can't name what you gave up, you haven't understood it.</li>
+        </ol>
+
+        <p class="section-tag">Your turn</p>
+        <h2>Final challenge: run your own design review</h2>
+        <div class="card">
+            <p>Pick one and design it end to end, using the same steps (requirements → numbers → design → what breaks first):</p>
+            <ul>
+                <li><strong>A rate limiter service</strong> used by every Brightcart API (Incident 07, as its own system).</li>
+                <li><strong>Brightcart's notification system</strong>: email, SMS and push, 50M users, with no duplicates and no lost notifications.</li>
+                <li><strong>A flash-sale inventory service</strong> for 100k buyers competing for 500 items in 10 seconds.</li>
+            </ul>
+        </div>
+        <details>
+            <summary>How to grade yourself</summary>
+            <ul>
+                <li>Did you write down functional <em>and</em> non-functional requirements, including at least one that changed your design?</li>
+                <li>Do your numbers identify the bottleneck?</li>
+                <li>Did you name at least three trade-offs, with what you gave up?</li>
+                <li>Did you identify the hot key or hot path, and the failure mode for each dependency?</li>
+                <li>Could you explain each choice by pointing to a real incident from this course?</li>
+            </ul>
+        </details>
+
+        <p class="section-tag">Live drill</p>
+        <h2>Do a mock interview with a real interviewer</h2>
+        <div class="drill">
+            <pre id="drill">Act as Rhea, a Principal Engineer conducting a 45-minute system design interview, with Morgan (a Staff SRE) occasionally jumping in with "what breaks first?" questions. The problem: design a URL shortener with click analytics and non-guessable links. Don't lead me. Let me drive requirements, estimates, and design; push back on weak choices (e.g., 301 vs 302, counter-based IDs, synchronous counters); and throw a launch-day hot-key incident at me near the end. At the end, give me a hire/no-hire decision with specific strengths and gaps, and suggest which areas to practice next.</pre>
+            <button class="copy" type="button" data-copy="drill">Copy</button>
+        </div>
+
+        <div class="scoreboard">
+            <h3>Promotion packet submitted</h3>
+            <p data-score></p>
+            <button type="button" data-reset>Replay this chapter</button>
+        </div>
+    </div>
+
+    <nav class="modnav">
+        <a href="09-distributed-storage.html"><small>← Previous</small>One Typo, Four Hours</a>
+        <a class="next" href="../index.html"><small>Back to →</small>Year One overview</a>
+    </nav>
+
+</div>
 </body>
 </html>

@@ -3,31 +3,248 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Module 8: Consistency Models</title>
+    <title>08 · Split Brain — Consistency Models</title>
+    <meta name="description" content="Incident 08: Brightcart goes multi-region, oversells limited stock, confuses users with stale reads, then suffers a network partition with two primaries. Learn CAP, PACELC, consistency models, quorums and conflict resolution.">
     <link rel="stylesheet" href="../styles.css">
+    <script>document.documentElement.classList.add('js')</script>
+    <script defer src="../assets/engine.js"></script>
 </head>
-<body>
-    <header>
-        <h1>Module 8: Consistency Models</h1>
-        <a href="../index.html">Back to Home</a>
+<body data-module="08">
+<div class="wrap">
+
+    <nav class="topbar"><a href="../index.html">← Year One at Brightcart</a><span>Incident 08 / 10</span></nav>
+
+    <header class="mod-header">
+        <p class="kicker">Month 9 · Consistency Models</p>
+        <h1>Split Brain</h1>
+        <ul class="meta">
+            <li>Role: engineer on the multi-region project</li>
+            <li>3 decisions</li>
+            <li>~18 min</li>
+        </ul>
     </header>
 
-    <div class="section">
-        <h2>Understanding Consistency</h2>
-        <p>In distributed systems, consistency refers to the guarantee that all replicas of a piece of data will have the same value at a given point in time. There are various levels of consistency, each with its own trade-offs.</p>
-
-        <h3>Strong Consistency</h3>
-        <p>Also known as linearizability, this is the strongest consistency model. It guarantees that every operation appears to take place instantaneously. Once a write is complete, all subsequent reads will see the new value.</p>
-
-        <h3>Weak Consistency</h3>
-        <p>The system does not guarantee that subsequent reads will return the updated value. It may take some time for the new value to propagate to all replicas.</p>
-
-        <h3>Eventual Consistency</h3>
-        <p>A specific form of weak consistency. It guarantees that if no new updates are made to a given data item, all accesses to that item will eventually return the last updated value. This is a common model in highly available systems like NoSQL databases.</p>
-
-        <h3>Causal Consistency</h3>
-        <p>A stronger model than eventual consistency. It ensures that if operation A happens before operation B, then A is guaranteed to be seen by every replica before B. Operations that are not causally related can be seen in any order.</p>
+    <div class="pager">
+<div class="line"><span class="ts">Mon 09:00</span>  #project-two-regions kickoff</div>
+<div class="line"><span class="ts">Mon 09:01</span>  <b>@devin</b>: West Coast users see 80ms of extra latency on every request. Plan: run Brightcart <b>active-active</b> in us-east AND us-west. Both regions serve reads <i>and writes</i>. Data replicates between them.</div>
+<div class="line"><span class="ts">Mon 09:02</span>  <b>@morgan</b>: "Both regions accept writes." Everyone remember that sentence. We'll be coming back to it.</div>
     </div>
 
+    <p>Going multi-region means every piece of data now lives in two places 70ms apart. Every write raises a question: do we wait for the other region to confirm (slow, but always correct), or do we confirm locally and replicate in the background (fast, but the regions can disagree for a while)?</p>
+    <p>There's no single right answer. It depends on the data.</p>
+
+    <aside class="mentor">
+        <div class="avatar">M</div>
+        <div>
+            <p class="who">Morgan · Staff SRE · 14 years on-call</p>
+            <p>Junior engineers ask "should the system be consistent?" Seniors ask "what's the cost of this <em>particular</em> piece of data being wrong for 2 seconds?" For a profile picture, nothing. For the last pair of limited sneakers, a very angry customer. Decide per data type.</p>
+        </div>
+    </aside>
+
+    <div class="decision" data-id="d1">
+        <span class="label">Decision 1 · Design review</span>
+        <h3>How should the inventory count for limited-edition items work across two regions?</h3>
+        <div class="choice" data-verdict="bad">
+            <button type="button">Each region decrements its local copy and replicates asynchronously. It's fast for everyone.</button>
+            <div class="outcome" hidden>
+                <p>The sneaker drop has 50 pairs. East and West each see <code>stock = 50</code> and each sell 50 before the replication messages cross. <strong>You've sold 100 pairs of a 50-pair item.</strong> Fifty apology emails go out, and a sneaker blog writes it up. Eventual consistency on a hard invariant means you'll eventually be wrong.</p>
+            </div>
+        </div>
+        <div class="choice" data-verdict="good">
+            <button type="button">Inventory has a single home region (the leader). Writes from the other region are forwarded there, accepting about 70ms extra on add-to-cart for West users. Product descriptions and reviews replicate asynchronously.</button>
+            <div class="outcome" hidden>
+                <p>You picked <strong>strong consistency for the invariant</strong> and <strong>eventual consistency for everything else</strong>. 70ms on one button is invisible. Overselling isn't. For truly global hot items you could split the stock into per-region allocations (East gets 25, West gets 25, rebalanced periodically), so each region decrements locally without risk.</p>
+            </div>
+        </div>
+        <div class="choice" data-verdict="ok">
+            <button type="button">Let both regions sell, then reconcile overnight and cancel any oversold orders.</button>
+            <div class="outcome" hidden>
+                <p>This is a legitimate business strategy, and airlines overbook on purpose. For Brightcart's regular stock with thousands of units, the rare oversell is cheap to apologize for. For a 50-unit limited drop, you'll cancel a large share of orders and wreck trust. Fine for <em>some</em> data. You need to know which.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="gated" data-after="d1">
+        <p>Two weeks into active-active. A support ticket:</p>
+        <div class="pager">
+<div class="line"><span class="ts">Thu 15:31</span>  ticket #91402: "I changed my shipping address, the page said Saved, I refreshed and it showed my OLD address. Changed it again. Refreshed. Old again. Which one will my order ship to?!"</div>
+        </div>
+        <p>The user's write went to us-west (their nearest region). Their refresh was routed to us-east by a DNS change, and us-east hadn't received the update yet.</p>
+
+        <div class="decision" data-id="d2">
+            <span class="label">Decision 2 · Support escalation</span>
+            <h3>How do you fix this without slowing down every read?</h3>
+            <div class="choice" data-verdict="good">
+                <button type="button">Guarantee <em>read-your-writes</em> and <em>monotonic reads</em> per session: pin a user to one region (or track their last write's version and only read from replicas that have it).</button>
+                <div class="outcome" hidden>
+                    <p><strong>Session guarantees</strong> are the sweet spot. The user always sees their own writes and never sees time go backwards. Other users might see the old address for a second, which doesn't matter to anyone. You fixed what users actually experience without the cost of global strong consistency.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="ok">
+                <button type="button">Make all writes synchronous across regions, so both regions confirm before returning.</button>
+                <div class="outcome" hidden>
+                    <p>Correct, but every write now pays the cross-region round trip, about 70ms plus consensus overhead, and if the link between regions degrades, <em>writes everywhere</em> slow down or stop. You used a sledgehammer on a thumbtack.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="bad">
+                <button type="button">It's eventual consistency, working as designed. Document it in the FAQ.</button>
+                <div class="outcome" hidden>
+                    <p>"Working as designed" while orders ship to the wrong address. Users think in sessions: "I just changed it." Any design that lets a user see their own change disappear will look like a bug to them, no matter what the docs say.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="gated" data-after="d2">
+        <p>Month 9, Sunday 22:52. Planned maintenance on the fiber link between regions.</p>
+        <div class="pager">
+<div class="line"><span class="ts">22:52:10</span>  network: us-east ↔ us-west link <span class="err">DOWN</span></div>
+<div class="line"><span class="ts">22:52:27</span>  db-failover: us-east primary unreachable from quorum → <span class="warn">promoting us-west-db to PRIMARY</span></div>
+<div class="line"><span class="ts">22:52:53</span>  network: link <span class="okc">UP</span> (outage: 43s)</div>
+<div class="line"><span class="ts">22:52:54</span>  <span class="sev">SEV1</span> <span class="err">TWO PRIMARIES</span>: us-east-db accepted 1,214 writes during partition; us-west-db accepted 2,890 writes</div>
+        </div>
+        <p>For 43 seconds both databases believed they were the primary and accepted writes. There are 4,104 writes that the other side has never seen, including orders, payments and address changes. Some touch the same rows.</p>
+
+        <div class="decision" data-id="d3">
+            <span class="label">Decision 3 · 22:55 · Split brain</span>
+            <h3>What now?</h3>
+            <div class="choice" data-verdict="bad">
+                <button type="button">Keep us-west as primary (it has more writes), point everything at it, and discard us-east's 1,214 writes.</button>
+                <div class="outcome" hidden>
+                    <p>Site's back up in 10 minutes. Monday morning: 1,214 orders, payments and account changes have vanished. Customers were charged for orders that no longer exist. You turned a 43-second blip into a data-loss incident that finance spends a month cleaning up.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="bad">
+                <button type="button">Merge both sides automatically with last-write-wins using timestamps.</button>
+                <div class="outcome" hidden>
+                    <p>Server clocks in the two regions are 380ms apart. Last-write-wins silently picks the "later" timestamp, which isn't necessarily the later write, and throws away the other <em>without telling anyone</em>. Some inventory decrements are lost, so stock counts drift. It looks fine, and that's what makes it dangerous.</p>
+                </div>
+            </div>
+            <div class="choice" data-verdict="good">
+                <button type="button">Freeze writes (read-only mode, honest status page), preserve both sides' unreplicated writes, reconcile them deliberately, then resume, even if it takes hours.</button>
+                <div class="outcome" hidden>
+                    <p>You chose <strong>data integrity over availability</strong>. It's a painful, slow, public night: the site is degraded for hours while the team replays East's writes into West, resolves the conflicts by hand or with business rules, and verifies. But no customer loses an order or a payment. Morgan: "That's the call GitHub made in 2018. It cost them 24 hours. It was still the right call."</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="gated" data-after="d3">
+
+        <p class="section-tag">Debrief</p>
+        <h2>What you just learned</h2>
+
+        <div class="card">
+            <h3>CAP, the honest version</h3>
+            <p>When the network <strong>P</strong>artitions (and it will, as you saw for 43 seconds), each side has to choose:</p>
+            <ul>
+                <li><strong>C</strong>onsistency: refuse requests that might be wrong (you froze writes in Decision 3), or</li>
+                <li><strong>A</strong>vailability: keep serving and accept that the sides will diverge (what the automated failover did).</li>
+            </ul>
+            <p><strong>PACELC</strong> extends it: when there's a <strong>P</strong>artition, choose <strong>A</strong> or <strong>C</strong>. <strong>E</strong>lse, in normal operation, choose <strong>L</strong>atency or <strong>C</strong>onsistency. Decisions 1 and 2 were the "else" half: 70ms of latency for consistent inventory.</p>
+        </div>
+
+        <div class="card">
+            <h3>The consistency ladder, strongest to weakest</h3>
+            <div class="table-wrap"><table>
+                <tr><th>Model</th><th>Guarantee</th><th>Brightcart example</th></tr>
+                <tr><td><strong>Linearizable</strong> (strong)</td><td>Behaves like one copy. Every read sees the latest completed write</td><td>Inventory decrement, payments</td></tr>
+                <tr><td><strong>Sequential</strong></td><td>Everyone sees operations in the same order (not necessarily in real time)</td><td>Ordered event logs</td></tr>
+                <tr><td><strong>Causal</strong></td><td>If A caused B, everyone sees A before B</td><td>A review reply never shows up before the review</td></tr>
+                <tr><td><strong>Read-your-writes</strong></td><td>You always see your own writes</td><td>Address change (Decision 2)</td></tr>
+                <tr><td><strong>Monotonic reads</strong></td><td>Your reads never go back in time</td><td>Refreshing never shows older data</td></tr>
+                <tr><td><strong>Eventual</strong></td><td>If writes stop, all replicas converge eventually</td><td>Review counts, product descriptions</td></tr>
+            </table></div>
+        </div>
+
+        <div class="card">
+            <h3>Quorums: tunable consistency</h3>
+            <p>With <strong>N</strong> replicas, write to <strong>W</strong> and read from <strong>R</strong>. If <strong>R + W &gt; N</strong>, every read overlaps at least one replica with the latest write. With N=3, W=2, R=2 you get strong reads and can tolerate one node down. With W=1, R=1 you get fast and eventual. Dynamo, Cassandra and Riak expose these knobs per request.</p>
+        </div>
+
+        <div class="card">
+            <h3>When replicas disagree: conflict resolution</h3>
+            <ul>
+                <li><strong>Last-write-wins:</strong> simple, and silently loses data. Clocks lie.</li>
+                <li><strong>Version vectors / vector clocks:</strong> detect that two writes were concurrent, and let the app merge them.</li>
+                <li><strong>CRDTs:</strong> data types that merge automatically and correctly (counters, sets, text). Used in collaborative editors.</li>
+                <li><strong>Avoid conflicts:</strong> give each record a single home region (Decision 1), so conflicts can't happen.</li>
+            </ul>
+        </div>
+
+        <p class="section-tag">It happened for real</p>
+        <h2>Real postmortems</h2>
+
+        <article class="postmortem">
+            <div class="pm-head"><span>GitHub · Network partition &amp; MySQL failover</span><span class="dur">Oct 21, 2018 · 24h 11m degraded</span></div>
+            <div class="pm-body">
+                <p>Routine maintenance replacing failing optical equipment cut connectivity between GitHub's US East Coast network hub and its primary East Coast data center for <strong>43 seconds</strong>. In that window, their automated failover tool (Orchestrator, which uses Raft consensus) promoted MySQL primaries in the <strong>US West Coast</strong> data center. When connectivity returned, writes went to the West, but the East had accepted writes that hadn't replicated. GitHub chose to <strong>protect data integrity</strong>: they kept the site degraded while they restored and reconciled data, rather than discarding writes to recover faster. It lasted 24 hours and 11 minutes.</p>
+                <p class="lesson"><strong>Lesson:</strong> automated failover can turn a 43-second blip into split brain. Decision 3 was modeled on this. Read the whole postmortem: it's one of the best ever published.</p>
+                <p class="source">Source: <a href="https://github.blog/2018-10-30-oct21-post-incident-analysis/">GitHub: October 21 post-incident analysis</a></p>
+            </div>
+        </article>
+
+        <article class="postmortem">
+            <div class="pm-head"><span>Amazon · Dynamo and the shopping cart</span><span class="dur">SOSP 2007</span></div>
+            <div class="pm-body">
+                <p>Amazon's Dynamo paper describes a deliberate availability-over-consistency choice: <strong>"add to cart" must never fail</strong>, even during failures. Concurrent cart versions are merged when they're read. The documented side effect: an item you <em>deleted</em> can occasionally reappear. Amazon decided that's far better than ever losing an add.</p>
+                <p class="lesson"><strong>Lesson:</strong> consistency is a business decision. Amazon chose AP for carts and would never choose it for payments. The skill is knowing which data can tolerate which anomaly.</p>
+                <p class="source">Source: <a href="https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf">Dynamo: Amazon's Highly Available Key-value Store (PDF)</a></p>
+            </div>
+        </article>
+
+        <p class="section-tag">Field notes</p>
+        <h2>Morgan's rules of thumb</h2>
+        <ol class="rules">
+            <li>Choose the consistency level per data type, by asking what being wrong for 2 seconds costs.</li>
+            <li>Hard invariants (stock, money) get one home. Everything else can replicate asynchronously.</li>
+            <li>Session guarantees (read-your-writes, monotonic reads) fix most user-visible weirdness cheaply.</li>
+            <li>Last-write-wins means "lose data silently." Don't trust wall clocks across machines.</li>
+            <li>Automated failover needs fencing, so the old primary <em>can't</em> accept writes after a new one is promoted.</li>
+        </ol>
+
+        <p class="section-tag">Your turn</p>
+        <h2>Design challenge</h2>
+        <div class="card">
+            <p><strong>Brightcart Wishlists go global</strong>: users in the US, EU and Japan, each served by their own region. Users add items from their phone and laptop, sometimes offline, and share lists with family members who also edit them.</p>
+            <p>What consistency model? What happens when two people edit the same list during a partition? What does the user see?</p>
+        </div>
+        <details>
+            <summary>Hints</summary>
+            <ul>
+                <li>Is a wishlist more like a bank balance or more like a shopping cart?</li>
+                <li>"Add item" and "remove item" can commute if you model them right. Look up OR-Set CRDTs.</li>
+            </ul>
+        </details>
+        <details>
+            <summary>What a strong answer covers</summary>
+            <ul>
+                <li>An AP / eventually consistent design with automatic merging: a set CRDT, with adds and removes tagged with unique IDs.</li>
+                <li>Read-your-writes per device, plus offline queueing and sync.</li>
+                <li>An explicit choice about add/remove conflicts (add-wins vs remove-wins) and why.</li>
+                <li>A home region per list as an alternative, with the latency trade-off for remote editors.</li>
+            </ul>
+        </details>
+
+        <p class="section-tag">Live drill</p>
+        <h2>Run it again with a real Game Master</h2>
+        <div class="drill">
+            <pre id="drill">Act as Morgan, a Staff engineer running a live simulation. My e-commerce company is going active-active across two regions. Walk me through: choosing consistency levels for different data (inventory, profiles, reviews), a stale-read bug a user reports, and finally a network partition that causes split brain with two database primaries. Narrate with logs and replication metrics. Make me decide, play out consequences honestly (including data loss if I choose it), and don't hint. Cover CAP/PACELC, the consistency ladder, quorums, LWW vs vector clocks vs CRDTs, fencing. End with a postmortem and grade me.</pre>
+            <button class="copy" type="button" data-copy="drill">Copy</button>
+        </div>
+
+        <div class="scoreboard">
+            <h3>Incident resolved</h3>
+            <p data-score></p>
+            <button type="button" data-reset>Replay this incident</button>
+        </div>
+    </div>
+
+    <nav class="modnav">
+        <a href="07-api-design.html"><small>← Previous</small>The App We Broke</a>
+        <a class="next" href="09-distributed-storage.html"><small>Next incident →</small>One Typo, Four Hours</a>
+    </nav>
+
+</div>
 </body>
 </html>
